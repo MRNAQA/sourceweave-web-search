@@ -1,0 +1,6 @@
+services:
+  openwebui:
+    build:
+      context: ../open-webui
+      dockerfile: Dockerfile
+    image: openwebui-local-source

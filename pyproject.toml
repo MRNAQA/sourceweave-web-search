@@ -1,0 +1,30 @@
+[project]
+name = "web-research-studio"
+version = "0.1.0"
+description = "Rebranded OpenWebUI web research tool with a local dev stack"
+readme = "README.md"
+authors = [
+    { name = "Mohammad El-Naqa", email = "55245971+MRNAQA@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp",
+    "crawl4ai",
+    "loguru",
+    "markitdown[docx,pdf,pptx,xlsx]",
+    "pydantic",
+    "redis>=5.0",
+    "requests",
+]
+
+[project.scripts]
+web-research-studio = "web_research_studio:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
