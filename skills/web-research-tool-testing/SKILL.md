@@ -7,6 +7,8 @@ description: Use this whenever the user wants to validate `web_research_tool.py`
 
 Use this repo as a standalone harness. Do not add the target app back into the local workflow unless the user explicitly asks for it.
 
+The canonical source now lives under `src/web_research_studio/tool.py`; `web_research_tool.py` is the generated standalone OpenWebUI artifact.
+
 ## Goal
 
 Validate the pasted-tool behavior directly:
@@ -39,7 +41,7 @@ docker compose up -d redis searxng crawl4ai
 2. Run a direct model-style tool call from the `tester` container.
 
 ```bash
-docker compose run --rm tester uv run python scripts/run_tool_call.py \
+docker compose run --rm tester uv run web-research-studio \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \
@@ -61,6 +63,7 @@ docker compose run --rm tester uv run python scripts/run_tool_call.py \
 5. If needed, run the automated checks.
 
 ```bash
+docker compose run --rm tester uv run pytest tests/test_packaging.py
 docker compose run --rm tester uv run pytest tests/test_tool.py
 docker compose run --rm tester uv run python tests/test_phase4.py
 ```

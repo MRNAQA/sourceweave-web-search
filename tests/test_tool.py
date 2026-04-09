@@ -1,12 +1,18 @@
 """Standalone runtime checks that call the tool directly."""
 
 import asyncio
+import json
+import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from web_research_tool import Tools
+from web_research_studio.tool import Tools
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
 
 
 def test_search_and_read_round_trip():
@@ -124,3 +130,36 @@ def test_explicit_url_crawl_without_relying_on_search_ranking():
         assert results[0]["url"].startswith("https://www.python.org/about"), results[0]
 
     asyncio.run(scenario())
+
+
+def test_run_tool_call_batches_read_page_results():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_tool_call.py",
+            "--query",
+            "python programming",
+            "--depth",
+            "quick",
+            "--max-results",
+            "2",
+            "--read-first-pages",
+            "2",
+        ],
+        cwd=_repo_root(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert isinstance(payload.get("search_and_crawl"), list), payload
+    assert len(payload["search_and_crawl"]) == 2, payload
+
+    batched_read = payload.get("read_page")
+    assert isinstance(batched_read, dict), payload
+    assert batched_read["returned_pages"] == 2, batched_read
+    assert len(batched_read["requested_page_ids"]) == 2, batched_read
+    assert len(batched_read["pages"]) == 2, batched_read
+    assert not batched_read["errors"], batched_read

@@ -1,2 +1,4 @@
-def main() -> None:
-    print("web-research-studio provides a standalone test harness for web_research_tool.py.")
+from web_research_studio.cli import main
+from web_research_studio.tool import Tools
+
+__all__ = ["Tools", "main"]

@@ -1,28 +1,32 @@
 [project]
 name = "web-research-studio"
-version = "0.1.0"
-description = "Standalone dev harness for a deployment-ready web research tool"
+version = "0.2.0"
+description = "SourceWeave: AI web search with OpenWebUI and MCP delivery targets"
 readme = "README.md"
+license = { text = "MIT" }
 authors = [
-    { name = "Mohammad El-Naqa", email = "55245971+MRNAQA@users.noreply.github.com" }
+    { name = "Mohammad ElNaqa", email = "55245971+MRNAQA@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp",
-    "crawl4ai",
     "loguru",
     "markitdown[docx,pdf,pptx,xlsx]",
+    "mcp>=1.8.0",
     "pydantic",
     "redis>=5.0",
-    "requests",
 ]
 
 [project.scripts]
-web-research-studio = "web_research_studio:main"
+web-research-studio = "web_research_studio.cli:main"
+web-research-mcp = "web_research_studio.mcp_server:main"
+web-research-build-openwebui = "web_research_studio.build_openwebui:main"
 
 [dependency-groups]
 dev = [
+    "crawl4ai",
     "pytest",
+    "requests",
 ]
 
 [build-system]

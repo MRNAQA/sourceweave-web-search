@@ -1,14 +1,36 @@
-# Web Research Studio
+# SourceWeave Web Search
 
-Standalone dev repo for a deployment-ready web search and crawl tool.
+Web search and crawl tool that ships in two forms:
+
+- a generated standalone OpenWebUI tool file for copy/paste
+- installable CLI and MCP entry points for `uv run` and `uvx`
 
 ## What It Includes
 
-- `web_research_tool.py`: the tool file you can paste into your target app
+- `src/web_research_studio/tool.py`: canonical tool implementation used by the package, CLI, and MCP server
+- `web_research_tool.py`: generated standalone OpenWebUI artifact copied from `src/web_research_studio/tool.py`
+- `src/web_research_studio/cli.py`: package CLI for direct tool calls
+- `src/web_research_studio/mcp_server.py`: MCP server entry point for `uvx` and MCP clients
+- `src/web_research_studio/build_openwebui.py`: build/check logic for the OpenWebUI artifact
 - `docker-compose.yml`: local stack with `redis`, `crawl4ai`, `searxng`, and a `tester` container
-- `scripts/run_tool_call.py`: direct model-style invocation harness for `search_and_crawl` and batched `read_page`
+- `scripts/run_tool_call.py`: thin wrapper around the package CLI for the existing local harness workflow
+- `scripts/build_openwebui_tool.py`: thin wrapper that regenerates or checks the standalone OpenWebUI file
 - `tests/`: standalone integration checks that call the tool directly
 - `skills/web-research-tool-testing/`: repo-local skill describing the local testing workflow
+
+## Architecture
+
+The code under `src/` is the source of truth.
+
+- `src/web_research_studio/tool.py` contains the real implementation.
+- `web_research_tool.py` is an artifact that stays byte-for-byte in sync with it.
+- `search_and_crawl` and batched `read_page` are exposed through both the CLI and MCP server.
+
+Keep edits in the main module and then verify the OpenWebUI artifact is still in sync:
+
+```bash
+uv run web-research-build-openwebui --check
+```
 
 ## Local Setup
 
@@ -21,7 +43,7 @@ docker compose up -d redis searxng crawl4ai
 2. Run a direct tool call the same way a model would use it:
 
 ```bash
-docker compose run --rm tester uv run python scripts/run_tool_call.py \
+docker compose run --rm tester uv run web-research-studio \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \
@@ -30,14 +52,54 @@ docker compose run --rm tester uv run python scripts/run_tool_call.py \
 
 That command instantiates `Tools()`, calls `search_and_crawl(...)`, and optionally follows up with `read_page(page_ids=[...])` using the first returned page IDs in one batch.
 
+The wrapper script still works too:
+
+```bash
+docker compose run --rm tester uv run python scripts/run_tool_call.py \
+  --query "python programming" \
+  --depth quick \
+  --read-first-pages 2 \
+  --pretty
+```
+
+## MCP And uvx
+
+Run the MCP server from the repo:
+
+```bash
+uvx --from . web-research-mcp
+```
+
+Run the package CLI from the repo:
+
+```bash
+uvx --from . web-research-studio --query "python programming" --read-first-pages 2
+```
+
+For host-side use, prefer explicit runtime overrides instead of changing code:
+
+```bash
+WEB_RESEARCH_SEARXNG_BASE_URL="http://localhost:19080/search?format=json&q=<query>" \
+WEB_RESEARCH_CRAWL4AI_BASE_URL="http://localhost:19235" \
+WEB_RESEARCH_CACHE_REDIS_URL="redis://localhost:6379/2" \
+uvx --from . web-research-studio --query "python programming" --read-first-pages 2
+```
+
 ## Automated Checks
 
 Run the standalone runtime checks inside the `tester` container:
 
 ```bash
+docker compose run --rm tester uv run pytest tests/test_packaging.py
 docker compose run --rm tester uv run pytest tests/test_tool.py
 docker compose run --rm tester uv run python tests/test_phase4.py
 ```
+
+`tests/test_packaging.py` verifies the package surfaces:
+
+- the generated OpenWebUI artifact is in sync with the package source
+- the package CLI can be invoked
+- the MCP server exposes `search_and_crawl` and `read_page`
 
 `tests/test_tool.py` verifies the main tool contract:
 
@@ -49,7 +111,7 @@ docker compose run --rm tester uv run python tests/test_phase4.py
 
 ## Defaults
 
-The tool defaults are intentionally aligned with deployment-style container names and ports so you do not need to change valves before deployment:
+The standalone OpenWebUI artifact keeps deployment-style container defaults so you do not need to change valves before deployment:
 
 - SearXNG: `http://searxng:8080/search?format=json&q=<query>`
 - Crawl4AI: `http://crawl4ai:11235`
@@ -64,6 +126,7 @@ Default host ports used by this repo:
 
 ## Notes
 
-- The repo is now a standalone local test harness.
-- Paste `web_research_tool.py` into your target app manually when you are ready to deploy.
+- The repo now supports both copy/paste OpenWebUI delivery and installable CLI/MCP delivery from the same codebase.
+- Keep manual edits in `src/web_research_studio/tool.py`, then regenerate or check `web_research_tool.py`.
+- Paste `web_research_tool.py` into OpenWebUI when you are ready to deploy the standalone tool file.
 - `read_page(page_ids=[...])` now supports batched page reads and still falls back to Redis-backed cached page content, so follow-up reads are more stable across fresh tool instances.
