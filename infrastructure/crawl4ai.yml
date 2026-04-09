@@ -1,0 +1,14 @@
+services:
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    ports:
+      - "19235:11235"
+    environment:
+      CRAWL4AI_API_TOKEN: "dev-change-me"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:11235/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped

@@ -35,13 +35,13 @@ These are deployment-aligned internal Docker network values, not localhost value
 1. Bring up the dependency stack.
 
 ```bash
-docker compose up -d redis searxng crawl4ai
+docker compose up -d mcp
 ```
 
-2. Run a direct model-style tool call from the `tester` container.
+2. Run a direct model-style tool call from the `mcp` service definition.
 
 ```bash
-docker compose run --rm tester uv run sourceweave-search \
+docker compose run --rm mcp uv run sourceweave-search \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \
@@ -63,9 +63,9 @@ docker compose run --rm tester uv run sourceweave-search \
 5. If needed, run the automated checks.
 
 ```bash
-docker compose run --rm tester uv run pytest tests/test_packaging.py
-docker compose run --rm tester uv run pytest tests/test_tool.py
-docker compose run --rm tester uv run python tests/test_phase4.py
+docker compose run --rm mcp uv run pytest tests/test_packaging.py
+docker compose run --rm mcp uv run pytest tests/test_tool.py
+docker compose run --rm mcp uv run python tests/test_phase4.py
 ```
 
 ## What to look for

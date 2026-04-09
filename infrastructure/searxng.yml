@@ -1,0 +1,31 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "19080:8080"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -f /etc/searxng/settings.yml ]; then
+          grep -q '\- json' /etc/searxng/settings.yml || sed -i '/^  formats:/a\    - json' /etc/searxng/settings.yml
+        fi
+        exec /usr/local/searxng/entrypoint.sh
+    environment:
+      SEARXNG_SECRET: "dev-change-me"
+      SEARXNG_LIMITER: "false"
+      SEARXNG_IMAGE_PROXY: "false"
+    volumes:
+      - searxng-config:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  searxng-config:
+  searxng-cache:

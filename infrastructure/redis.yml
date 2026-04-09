@@ -1,0 +1,16 @@
+services:
+  redis:
+    image: valkey/valkey:8.0.1-alpine
+    command: "valkey-server --save 30 1 --maxclients 10000 --timeout 1800"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      start_period: 5s
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis-data:

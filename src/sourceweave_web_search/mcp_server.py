@@ -1,4 +1,5 @@
 import argparse
+import os
 from typing import Sequence
 
 from mcp.server.fastmcp import FastMCP
@@ -7,9 +8,21 @@ from sourceweave_web_search.config import build_tools
 from sourceweave_web_search.tool import Tools
 
 
+def _mcp_host() -> str:
+    return os.getenv("FASTMCP_HOST", "127.0.0.1")
+
+
+def _mcp_port() -> int:
+    return int(os.getenv("FASTMCP_PORT", "8000"))
+
+
 def build_mcp_server(tool: Tools | None = None) -> FastMCP:
     tool_instance = tool or build_tools()
-    server = FastMCP("sourceweave-web-search")
+    server = FastMCP(
+        "sourceweave-web-search",
+        host=_mcp_host(),
+        port=_mcp_port(),
+    )
 
     @server.tool(
         name="search_and_crawl",

@@ -12,7 +12,8 @@ Web search and crawl tool that ships in two forms:
 - `src/sourceweave_web_search/cli.py`: package CLI for direct tool calls
 - `src/sourceweave_web_search/mcp_server.py`: MCP server entry point for `uvx` and MCP clients
 - `src/sourceweave_web_search/build_openwebui.py`: build/check logic for the OpenWebUI artifact
-- `docker-compose.yml`: local stack with `redis`, `crawl4ai`, `searxng`, and a `tester` container
+- `docker-compose.yml`: root compose entrypoint with the `mcp` service and include-based dependency fragments
+- `infrastructure/*.yml`: per-service compose fragments for `redis`, `crawl4ai`, and `searxng`
 - `scripts/run_tool_call.py`: thin wrapper around the package CLI for the existing local harness workflow
 - `scripts/build_openwebui_tool.py`: thin wrapper that regenerates or checks the standalone OpenWebUI file
 - `tests/`: standalone integration checks that call the tool directly
@@ -34,16 +35,18 @@ uv run sourceweave-build-openwebui --check
 
 ## Local Setup
 
-1. Start the local dependency stack:
+1. Start the MCP stack:
 
 ```bash
-docker compose up -d redis searxng crawl4ai
+docker compose up -d mcp
 ```
 
-2. Run a direct tool call the same way a model would use it:
+That starts the `mcp` service and its included dependencies. The HTTP MCP endpoint is exposed at `http://localhost:18000/mcp`.
+
+2. Run a direct tool call in a one-off container that uses the same service definition:
 
 ```bash
-docker compose run --rm tester uv run sourceweave-search \
+docker compose run --rm mcp uv run sourceweave-search \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \
@@ -55,7 +58,7 @@ That command instantiates `Tools()`, calls `search_and_crawl(...)`, and optional
 The wrapper script still works too:
 
 ```bash
-docker compose run --rm tester uv run python scripts/run_tool_call.py \
+docker compose run --rm mcp uv run python scripts/run_tool_call.py \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \
@@ -63,6 +66,18 @@ docker compose run --rm tester uv run python scripts/run_tool_call.py \
 ```
 
 ## MCP And uvx
+
+Run the Docker-managed MCP server:
+
+```bash
+docker compose up -d mcp
+```
+
+Then connect a client to:
+
+```text
+http://localhost:18000/mcp
+```
 
 Run the MCP server from the repo:
 
@@ -87,12 +102,12 @@ uvx --from . sourceweave-search --query "python programming" --read-first-pages 
 
 ## Automated Checks
 
-Run the standalone runtime checks inside the `tester` container:
+Run the standalone runtime checks inside a one-off `mcp` container:
 
 ```bash
-docker compose run --rm tester uv run pytest tests/test_packaging.py
-docker compose run --rm tester uv run pytest tests/test_tool.py
-docker compose run --rm tester uv run python tests/test_phase4.py
+docker compose run --rm mcp uv run pytest tests/test_packaging.py
+docker compose run --rm mcp uv run pytest tests/test_tool.py
+docker compose run --rm mcp uv run python tests/test_phase4.py
 ```
 
 `tests/test_packaging.py` verifies the package surfaces:
@@ -123,6 +138,7 @@ Default host ports used by this repo:
 
 - SearXNG: `19080`
 - Crawl4AI: `19235`
+- MCP: `18000` at `/mcp`
 
 ## Notes
 

@@ -1,7 +1,12 @@
 name: sourceweave-web-search
 
+include:
+  - infrastructure/redis.yml
+  - infrastructure/crawl4ai.yml
+  - infrastructure/searxng.yml
+
 services:
-  tester:
+  mcp:
     image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     working_dir: /workspace
     user: "${UID:-1000}:${GID:-1000}"
@@ -12,6 +17,8 @@ services:
       CRAWL4_AI_BASE_DIRECTORY: /tmp
       UV_LINK_MODE: copy
       UV_CACHE_DIR: /tmp/uv-cache
+      FASTMCP_HOST: "0.0.0.0"
+      FASTMCP_PORT: "8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -19,76 +26,7 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
-    command: ["sleep", "infinity"]
-    restart: unless-stopped
-    networks:
-      - sourceweave-web-search-net
-
-  redis:
-    image: valkey/valkey:8.0.1-alpine
-    command: "valkey-server --save 30 1 --maxclients 10000 --timeout 1800"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
-      start_period: 5s
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - sourceweave-web-search-net
-
-  crawl4ai:
-    image: unclecode/crawl4ai:latest
+    command: ["uv", "run", "sourceweave-search-mcp", "--transport", "streamable-http"]
     ports:
-      - "19235:11235"
-    environment:
-      CRAWL4AI_API_TOKEN: "dev-change-me"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:11235/health >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      - "18000:8000"
     restart: unless-stopped
-    networks:
-      - sourceweave-web-search-net
-
-  searxng:
-    image: searxng/searxng:latest
-    ports:
-      - "19080:8080"
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        if [ -f /etc/searxng/settings.yml ]; then
-          grep -q '\- json' /etc/searxng/settings.yml || sed -i '/^  formats:/a\    - json' /etc/searxng/settings.yml
-        fi
-        exec /usr/local/searxng/entrypoint.sh
-    environment:
-      SEARXNG_SECRET: "dev-change-me"
-      SEARXNG_LIMITER: "false"
-      SEARXNG_IMAGE_PROXY: "false"
-    volumes:
-      - searxng-config:/etc/searxng
-      - searxng-cache:/var/cache/searxng
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
-    networks:
-      - sourceweave-web-search-net
-
-volumes:
-  redis-data:
-  searxng-config:
-  searxng-cache:
-
-networks:
-  sourceweave-web-search-net:
-    driver: bridge
