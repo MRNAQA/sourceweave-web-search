@@ -8,6 +8,8 @@ services:
     volumes:
       - .:/workspace
     environment:
+      HOME: /tmp
+      CRAWL4_AI_BASE_DIRECTORY: /tmp
       UV_LINK_MODE: copy
       UV_CACHE_DIR: /tmp/uv-cache
     depends_on:

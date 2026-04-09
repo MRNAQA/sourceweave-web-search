@@ -14,7 +14,7 @@ Validate the pasted-tool behavior directly:
 - instantiate `Tools()`
 - call `search_and_crawl(...)`
 - inspect the returned list shape and summaries
-- call `read_page(page_id, ...)`
+- call `read_page(page_ids=[...], ...)`
 - confirm the default service URLs match deployment-style container names and ports
 
 ## Default assumptions
@@ -42,7 +42,7 @@ docker compose up -d redis searxng crawl4ai
 docker compose run --rm tester uv run python scripts/run_tool_call.py \
   --query "python programming" \
   --depth quick \
-  --read-first-page \
+  --read-first-pages 2 \
   --pretty
 ```
 
@@ -55,7 +55,7 @@ docker compose run --rm tester uv run python scripts/run_tool_call.py \
 4. Check that `read_page` returns:
 
 - no `error`
-- the expected title/url
+- the expected titles/urls
 - enough cleaned content to be useful
 
 5. If needed, run the automated checks.

@@ -1,6 +1,6 @@
 """
 title: Web Research Studio
-description: Search the web and crawl pages using SearXNG and Crawl4AI. Returns compact summaries with page_ids; call read_page for full content.
+description: Search the web and crawl pages using SearXNG and Crawl4AI. Returns compact summaries with page_ids; call read_page with one or more page_ids for full content.
 author: lexiismadd (modified)
 author_url: https://github.com/lexiismadd
 funding_url: https://github.com/open-webui
@@ -9,8 +9,8 @@ license: MIT
 requirements: aiohttp, loguru, crawl4ai, markitdown, redis>=5.0
 
 Two-tool architecture:
-  search_and_crawl(query, depth) -> compact summaries + page_ids (token-cheap discovery)
-  read_page(page_id, focus?)     -> full page content or focused sections (depth on demand)
+    search_and_crawl(query, depth) -> compact summaries + page_ids (token-cheap discovery)
+    read_page(page_ids, focus?)    -> full page content for one or more pages (batch related reads when needed)
 
 Full content is stored in an in-process PageStore and cached in Valkey/Redis.
 BM25 scoring is used for summary generation and focused reads, not for filtering stored content.
@@ -262,7 +262,8 @@ class Tools:
                     "name": "search_and_crawl",
                     "description": (
                         "Search the web and crawl pages. Returns compact summaries with page_ids. "
-                        "If a summary isn't enough, call read_page(page_id) for full content."
+                        "If summaries are not enough, batch one or more page_ids into read_page(page_ids=[...]) for full content. "
+                        "Prefer one batched read_page call over repeated single-page calls when comparing multiple sources."
                     ),
                     "parameters": {
                         "type": "object",
@@ -293,15 +294,30 @@ class Tools:
                 "type": "function",
                 "function": {
                     "name": "read_page",
-                    "description": "Get the full cleaned content of a page from a prior search_and_crawl result.",
+                    "description": (
+                        "Get the full cleaned content for one or more pages from prior search_and_crawl results. "
+                        "Prefer batching related page_ids in one call instead of calling read_page repeatedly."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "page_id": {"type": "string"},
+                            "page_ids": {
+                                "type": "array",
+                                "description": (
+                                    "One or more page_ids returned by search_and_crawl. "
+                                    "Batch related pages into a single call when you need to compare or synthesize multiple sources."
+                                ),
+                                "items": {"type": "string"},
+                                "minItems": 1,
+                            },
                             "focus": {"type": "string", "default": ""},
-                            "max_chars": {"type": "integer", "default": 8000},
+                            "max_chars": {
+                                "type": "integer",
+                                "default": 8000,
+                                "description": "Maximum number of characters to return per page.",
+                            },
                         },
-                        "required": ["page_id"],
+                        "required": ["page_ids"],
                     },
                 },
             },
@@ -612,31 +628,41 @@ class Tools:
             result.append(url)
         return result
 
-    async def read_page(
+    async def _load_page_record(self, page_id: str) -> Optional[dict]:
+        record = self._page_store.get(page_id)
+        if record:
+            return record
+
+        cached_page = await self._cache.get(self._page_id_cache_key(page_id))
+        if not cached_page:
+            return None
+
+        try:
+            cached_record = json.loads(cached_page)
+            cached_page_id = self._page_store.put(
+                cached_record["url"],
+                cached_record.get("title", ""),
+                cached_record["content"],
+            )
+            if cached_page_id == page_id:
+                return self._page_store.get(page_id)
+        except Exception:
+            return None
+
+        return None
+
+    async def _read_single_page(
         self,
         page_id: str,
         focus: str = "",
         max_chars: int = 8000,
         __event_emitter__: EventEmitter = None,
     ) -> dict:
-        record = self._page_store.get(page_id)
-        if not record:
-            cached_page = await self._cache.get(self._page_id_cache_key(page_id))
-            if cached_page:
-                try:
-                    cached_record = json.loads(cached_page)
-                    cached_page_id = self._page_store.put(
-                        cached_record["url"],
-                        cached_record.get("title", ""),
-                        cached_record["content"],
-                    )
-                    if cached_page_id == page_id:
-                        record = self._page_store.get(page_id)
-                except Exception:
-                    record = None
+        record = await self._load_page_record(page_id)
         if not record:
             return {
-                "error": f"page_id '{page_id}' not found or expired. Call search_and_crawl again."
+                "page_id": page_id,
+                "error": f"page_id '{page_id}' not found or expired. Call search_and_crawl again.",
             }
 
         if __event_emitter__:
@@ -668,7 +694,63 @@ class Tools:
                     },
                 }
             )
-        return {"url": record["url"], "title": record["title"], "content": content}
+        return {
+            "page_id": page_id,
+            "url": record["url"],
+            "title": record["title"],
+            "content": content,
+        }
+
+    async def read_page(
+        self,
+        page_ids: Union[str, List[str]],
+        focus: str = "",
+        max_chars: int = 8000,
+        __event_emitter__: EventEmitter = None,
+    ) -> dict:
+        if isinstance(page_ids, str):
+            single_result = await self._read_single_page(
+                page_ids,
+                focus=focus,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
+            if "error" in single_result:
+                return {"error": single_result["error"]}
+            return single_result
+
+        normalized_page_ids = []
+        seen_page_ids = set()
+        for page_id in page_ids:
+            normalized_page_id = str(page_id).strip()
+            if not normalized_page_id or normalized_page_id in seen_page_ids:
+                continue
+            seen_page_ids.add(normalized_page_id)
+            normalized_page_ids.append(normalized_page_id)
+
+        if not normalized_page_ids:
+            return {"error": "page_ids must contain at least one non-empty page_id."}
+
+        pages = []
+        errors = []
+        for page_id in normalized_page_ids:
+            page_result = await self._read_single_page(
+                page_id,
+                focus=focus,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
+            if "error" in page_result:
+                errors.append({"page_id": page_id, "error": page_result["error"]})
+                continue
+            pages.append(page_result)
+
+        return {
+            "pages": pages,
+            "errors": errors,
+            "requested_page_ids": normalized_page_ids,
+            "returned_pages": len(pages),
+        }
 
     async def search_and_crawl(
         self,
