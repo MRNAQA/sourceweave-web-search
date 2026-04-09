@@ -1,7 +1,7 @@
 [project]
 name = "web-research-studio"
 version = "0.1.0"
-description = "Rebranded OpenWebUI web research tool with a local dev stack"
+description = "Standalone dev harness for a deployment-ready web research tool"
 readme = "README.md"
 authors = [
     { name = "Mohammad El-Naqa", email = "55245971+MRNAQA@users.noreply.github.com" }

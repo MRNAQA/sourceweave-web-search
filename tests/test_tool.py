@@ -1,177 +1,73 @@
-"""Standalone integration checks for the Web Research Studio stack."""
+"""Standalone runtime checks that call the tool directly."""
 
+import asyncio
 import sys
+from pathlib import Path
 
-import requests
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-SEARXNG_URL = "http://localhost:19080"
-CRAWL4AI_URL = "http://localhost:19235"
-
-
-def test_searxng_health():
-    print("=== SearXNG Health ===")
-    try:
-        response = requests.get(f"{SEARXNG_URL}/healthz", timeout=5)
-        print(f"  Status: {response.status_code}")
-        print("  PASS" if response.status_code == 200 else "  FAIL")
-        return response.status_code == 200
-    except Exception as exc:
-        print(f"  FAIL: {exc}")
-        return False
+from web_research_tool import Tools
 
 
-def test_searxng_json_search():
-    print("\n=== SearXNG JSON Search ===")
-    try:
-        response = requests.get(
-            f"{SEARXNG_URL}/search",
-            params={"q": "python programming", "format": "json"},
-            timeout=30,
+def test_search_and_read_round_trip():
+    async def scenario():
+        tool = Tools()
+        results = await tool.search_and_crawl(
+            query="python programming",
+            depth="quick",
+            max_results=2,
+            fresh=True,
         )
-        print(f"  Status: {response.status_code}")
-        if response.status_code != 200:
-            print(f"  FAIL: HTTP {response.status_code}")
-            print(f"  Body: {response.text[:200]}")
-            return False
 
-        data = response.json()
-        results = data.get("results", [])
-        print(f"  Query: {data.get('query')}")
-        print(f"  Results: {len(results)}")
-        for idx, result in enumerate(results[:3], start=1):
-            print(f"    [{idx}] {result.get('title', 'N/A')[:60]}")
-            print(f"        {result.get('url', 'N/A')[:80]}")
-        print("  PASS" if results else "  FAIL: no results")
-        return bool(results)
-    except Exception as exc:
-        print(f"  FAIL: {exc}")
-        return False
+        assert isinstance(results, list), results
+        assert results, "search_and_crawl returned no results"
+
+        first = results[0]
+        for key in ("url", "title", "page_id", "summary", "key_points"):
+            assert key in first, f"missing key '{key}' in result: {first}"
+
+        page = await tool.read_page(first["page_id"], max_chars=1200)
+        assert "error" not in page, page
+        assert len(page.get("content", "")) >= 200, page
+
+    asyncio.run(scenario())
 
 
-def test_crawl4ai_health():
-    print("\n=== Crawl4AI Health ===")
-    try:
-        response = requests.get(f"{CRAWL4AI_URL}/health", timeout=10)
-        print(f"  Status: {response.status_code}")
-        print(f"  Body: {response.text[:200]}")
-        print("  PASS" if response.status_code == 200 else "  FAIL")
-        return response.status_code == 200
-    except Exception as exc:
-        print(f"  FAIL: {exc}")
-        return False
-
-
-def test_crawl4ai_crawl():
-    print("\n=== Crawl4AI Crawl ===")
-    try:
-        payload = {
-            "urls": ["https://example.com"],
-            "crawler_config": {
-                "cache_mode": "bypass",
-                "page_timeout": 30000,
-                "stream": False,
-            },
-        }
-        response = requests.post(
-            f"{CRAWL4AI_URL}/crawl",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=60,
+def test_read_page_works_from_fresh_tool_instance():
+    async def scenario():
+        tool = Tools()
+        results = await tool.search_and_crawl(
+            query="asyncio python tutorial",
+            depth="quick",
+            max_results=1,
+            fresh=True,
         )
-        print(f"  Status: {response.status_code}")
-        if response.status_code != 200:
-            print(f"  FAIL: HTTP {response.status_code}")
-            print(f"  Body: {response.text[:300]}")
-            return False
 
-        data = response.json()
-        results = data.get("results", [])
-        print(f"  Results count: {len(results)}")
-        for result in results:
-            print(f"    URL: {result.get('url', 'N/A')}")
-            print(f"    Title: {result.get('metadata', {}).get('title', 'N/A')}")
-            print(f"    Success: {result.get('success', False)}")
-        passed = len(results) > 0 and results[0].get("success", False)
-        print("  PASS" if passed else "  FAIL")
-        return passed
-    except Exception as exc:
-        print(f"  FAIL: {exc}")
-        return False
+        assert isinstance(results, list), results
+        assert results, "search_and_crawl returned no results"
+
+        page_id = results[0]["page_id"]
+        fresh_tool = Tools()
+        page = await fresh_tool.read_page(page_id, max_chars=1000)
+        assert "error" not in page, page
+        assert len(page.get("content", "")) >= 200, page
+
+    asyncio.run(scenario())
 
 
-def test_end_to_end():
-    print("\n=== End-to-End: Search + Crawl ===")
-    try:
-        search_response = requests.get(
-            f"{SEARXNG_URL}/search",
-            params={"q": "what is docker compose", "format": "json"},
-            timeout=30,
+def test_explicit_url_crawl_without_relying_on_search_ranking():
+    async def scenario():
+        tool = Tools()
+        results = await tool.search_and_crawl(
+            query="python about page",
+            urls=["https://www.python.org/about/"],
+            depth="quick",
+            max_results=1,
+            fresh=True,
         )
-        if search_response.status_code != 200:
-            print(f"  FAIL: Search returned {search_response.status_code}")
-            return False
-        results = search_response.json().get("results", [])
-        if not results:
-            print("  FAIL: No search results")
-            return False
 
-        urls = [result.get("url") for result in results[:3] if result.get("url")]
-        print(f"  Found {len(urls)} URLs")
-        crawl_response = requests.post(
-            f"{CRAWL4AI_URL}/crawl",
-            json={
-                "urls": [urls[0]],
-                "crawler_config": {
-                    "cache_mode": "bypass",
-                    "page_timeout": 30000,
-                    "stream": False,
-                    "word_count_threshold": 200,
-                },
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=60,
-        )
-        if crawl_response.status_code != 200:
-            print(f"  FAIL: Crawl returned {crawl_response.status_code}")
-            return False
+        assert isinstance(results, list), results
+        assert results, "explicit URL crawl returned no results"
+        assert results[0]["url"].startswith("https://www.python.org/about"), results[0]
 
-        crawl_results = crawl_response.json().get("results", [])
-        passed = bool(crawl_results) and crawl_results[0].get("success", False)
-        print("  PASS" if passed else "  FAIL")
-        return passed
-    except Exception as exc:
-        print(f"  FAIL: {exc}")
-        return False
-
-
-def main():
-    print("Web Research Studio - Integration Tests")
-    print("=" * 50)
-    print(f"SearXNG: {SEARXNG_URL}")
-    print(f"Crawl4AI: {CRAWL4AI_URL}")
-    print()
-
-    results = {
-        "searxng_health": test_searxng_health(),
-        "searxng_search": test_searxng_json_search(),
-        "crawl4ai_health": test_crawl4ai_health(),
-        "crawl4ai_crawl": test_crawl4ai_crawl(),
-        "end_to_end": test_end_to_end(),
-    }
-
-    print("\n" + "=" * 50)
-    print("SUMMARY")
-    print("=" * 50)
-    all_pass = True
-    for name, passed in results.items():
-        status = "PASS" if passed else "FAIL"
-        print(f"  {name}: {status}")
-        if not passed:
-            all_pass = False
-    print(f"\n{'All tests passed!' if all_pass else 'Some tests FAILED.'}")
-    return 0 if all_pass else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    asyncio.run(scenario())

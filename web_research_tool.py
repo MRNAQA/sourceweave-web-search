@@ -1,10 +1,10 @@
 """
 title: Web Research Studio
-description: Search the web and crawl pages using SearXNG, OpenWebUI Native Search, and Crawl4AI. Returns compact summaries with page_ids; call read_page for full content.
+description: Search the web and crawl pages using SearXNG and Crawl4AI. Returns compact summaries with page_ids; call read_page for full content.
 author: lexiismadd (modified)
 author_url: https://github.com/lexiismadd
 funding_url: https://github.com/open-webui
-version: 3.0.0
+version: 3.1.0
 license: MIT
 requirements: aiohttp, loguru, crawl4ai, markitdown, redis>=5.0
 
@@ -46,19 +46,6 @@ try:
 except ImportError:
     _MD_CONVERTER = None
     MARKITDOWN_AVAILABLE = False
-
-try:
-    from open_webui.main import Request, app  # type: ignore
-    from open_webui.models.users import Users  # type: ignore
-    from open_webui.routers.retrieval import SearchForm, process_web_search  # type: ignore
-
-    NATIVE_SEARCH_AVAILABLE = True
-except ImportError:
-    NATIVE_SEARCH_AVAILABLE = False
-    logger.warning(
-        "OpenWebUI native search not available - install requirements or check OpenWebUI version"
-    )
-
 
 _TTL_RULES = [
     ("wikipedia.org", 86400),
@@ -191,8 +178,7 @@ class _PageStore:
 class Tools:
     class Valves(BaseModel):
         INITIAL_RESPONSE: str = Field(default="")
-        USE_NATIVE_SEARCH: bool = Field(default=True)
-        SEARCH_WITH_SEARXNG: bool = Field(default=False)
+        SEARCH_WITH_SEARXNG: bool = Field(default=True)
         SEARXNG_BASE_URL: str = Field(
             default="http://searxng:8080/search?format=json&q=<query>"
         )
@@ -444,52 +430,6 @@ class Tools:
         results = await asyncio.gather(*[self._validate_image_url(url) for url in urls])
         return [url for url, is_valid in zip(urls, results) if is_valid]
 
-    async def get_request(self) -> "Request":
-        if not NATIVE_SEARCH_AVAILABLE:
-            raise ImportError("OpenWebUI native search not available")
-        return Request(scope={"type": "http", "app": app})
-
-    async def _search_native(
-        self,
-        query: str,
-        __event_emitter__: Callable[[dict], Any] = None,
-        __user__: Optional[dict] = None,
-    ) -> List[str]:
-        if (
-            not self.valves.USE_NATIVE_SEARCH
-            or not NATIVE_SEARCH_AVAILABLE
-            or __user__ is None
-        ):
-            return []
-
-        try:
-            user = Users.get_user_by_id(__user__["id"])
-            if user is None:
-                return []
-
-            form = SearchForm.model_validate({"queries": [query]})
-            result = await process_web_search(
-                request=Request(scope={"type": "http", "app": app}),
-                form_data=form,
-                user=user,
-            )
-            return [
-                item.get("link") for item in result.get("items", []) if item.get("link")
-            ]
-        except Exception as exc:
-            logger.error(f"Error in native search: {exc}")
-            if __event_emitter__:
-                await __event_emitter__(
-                    {
-                        "type": "status",
-                        "data": {
-                            "description": f"Native search encountered an error: {exc}",
-                            "done": False,
-                        },
-                    }
-                )
-            return []
-
     async def _search_searxng(
         self, query: str, __event_emitter__: Callable[[dict], Any] = None
     ) -> List[str]:
@@ -570,13 +510,23 @@ class Tools:
             f"sc:page:{hashlib.md5(Tools._canonicalize_url(url).encode()).hexdigest()}"
         )
 
+    @staticmethod
+    def _page_id_cache_key(page_id: str) -> str:
+        return f"sc:pageid:{page_id}"
+
+    async def _store_page_record(self, url: str, title: str, content: str) -> str:
+        page_id = self._page_store.put(url, title, content)
+        cache_record = json.dumps({"url": url, "title": title, "content": content})
+        ttl = _ttl_for_url(url)
+        await self._cache.setex(self._page_cache_key(url), ttl, cache_record)
+        await self._cache.setex(self._page_id_cache_key(page_id), ttl, cache_record)
+        return page_id
+
     def _search_cache_key(self, query: str) -> str:
         providers = []
-        if self.valves.USE_NATIVE_SEARCH:
-            providers.append("native")
         if self.valves.SEARCH_WITH_SEARXNG:
             providers.append("searxng")
-        provider_str = "+".join(sorted(providers))
+        provider_str = "+".join(sorted(providers)) or "none"
         normalized = re.sub(r"\s+", " ", query.strip().lower())
         tokens = normalized.split()
         if len(tokens) >= 3:
@@ -666,6 +616,20 @@ class Tools:
         __event_emitter__: Callable[[dict], Any] = None,
     ) -> dict:
         record = self._page_store.get(page_id)
+        if not record:
+            cached_page = await self._cache.get(self._page_id_cache_key(page_id))
+            if cached_page:
+                try:
+                    cached_record = json.loads(cached_page)
+                    cached_page_id = self._page_store.put(
+                        cached_record["url"],
+                        cached_record.get("title", ""),
+                        cached_record["content"],
+                    )
+                    if cached_page_id == page_id:
+                        record = self._page_store.get(page_id)
+                except Exception:
+                    record = None
         if not record:
             return {
                 "error": f"page_id '{page_id}' not found or expired. Call search_and_crawl again."
@@ -764,10 +728,6 @@ class Tools:
             self._cache_stats["search_misses"] += 1
             all_search_urls = []
             search_tasks = []
-            if self.valves.USE_NATIVE_SEARCH:
-                search_tasks.append(
-                    self._search_native(query, __event_emitter__, __user__)
-                )
             if self.valves.SEARCH_WITH_SEARXNG:
                 search_tasks.append(self._search_searxng(query, __event_emitter__))
             if search_tasks:
@@ -818,8 +778,8 @@ class Tools:
                 self._cache_stats["page_hits"] += 1
                 try:
                     record = json.loads(cached_page)
-                    page_id = self._page_store.put(
-                        record["url"], record["title"], record["content"]
+                    page_id = await self._store_page_record(
+                        record["url"], record.get("title", ""), record["content"]
                     )
                     compact = self._build_compact_summary(record["content"], query)
                     crawl_results.append(
@@ -942,11 +902,7 @@ class Tools:
             if not content.strip():
                 return None
 
-            page_id = self._page_store.put(url, title, content)
-            cache_record = json.dumps({"url": url, "title": title, "content": content})
-            await self._cache.setex(
-                self._page_cache_key(url), _ttl_for_url(url), cache_record
-            )
+            page_id = await self._store_page_record(url, title, content)
             compact = self._build_compact_summary(content, query)
             return {
                 "url": url,
@@ -1067,13 +1023,7 @@ class Tools:
                 else:
                     page_content = str(markdown_data)
                 title = item.get("metadata", {}).get("title", "")
-                page_id = self._page_store.put(item_url, title, page_content)
-                cache_record = json.dumps(
-                    {"url": item_url, "title": title, "content": page_content}
-                )
-                await self._cache.setex(
-                    self._page_cache_key(item_url), _ttl_for_url(item_url), cache_record
-                )
+                page_id = await self._store_page_record(item_url, title, page_content)
                 compact = self._build_compact_summary(page_content, query or "")
                 results.append(
                     {

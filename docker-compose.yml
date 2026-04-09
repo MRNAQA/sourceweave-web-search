@@ -1,28 +1,15 @@
 name: web-research-studio
 
 services:
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:v0.8.12
-    ports:
-      - "3300:8080"
-    environment:
-      WEBUI_SECRET_KEY: "dev-change-me"
-      WEBUI_AUTH: "false"
-      ENABLE_OLLAMA_API: "false"
-      ENABLE_OPENAI_API: "false"
-      REDIS_URL: "redis://redis:6379/0"
-      ENABLE_WEBSOCKET_SUPPORT: "true"
-      WEBSOCKET_MANAGER: "redis"
-      WEBSOCKET_REDIS_URL: "redis://redis:6379/1"
-      ENABLE_WEB_SEARCH: "true"
-      WEB_SEARCH_ENGINE: "searxng"
-      WEB_SEARCH_RESULT_COUNT: "10"
-      WEB_SEARCH_CONCURRENT_REQUESTS: "10"
-      WEB_SEARCH_TRUST_ENV: "false"
-      SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>"
-      SEARXNG_LANGUAGE: "all"
+  tester:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    working_dir: /workspace
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
-      - openwebui-data:/app/backend/data
+      - .:/workspace
+    environment:
+      UV_LINK_MODE: copy
+      UV_CACHE_DIR: /tmp/uv-cache
     depends_on:
       redis:
         condition: service_healthy
@@ -30,26 +17,8 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+    command: ["sleep", "infinity"]
     restart: unless-stopped
-    networks:
-      - web-research-studio-net
-
-  openwebui-bootstrap:
-    image: python:3.12-slim
-    volumes:
-      - ./scripts/bootstrap_openwebui.py:/app/bootstrap_openwebui.py:ro
-      - ./web_research_tool.py:/app/web_research_tool.py:ro
-    environment:
-      OPENWEBUI_BASE_URL: "http://openwebui:8080"
-      OPENWEBUI_TOOL_ID: "web_research_tool"
-      OPENWEBUI_TOOL_NAME: "Web Research Studio"
-      OPENWEBUI_ADMIN_EMAIL: "admin@localhost"
-      OPENWEBUI_ADMIN_PASSWORD: "admin"
-    depends_on:
-      openwebui:
-        condition: service_healthy
-    command: ["python", "/app/bootstrap_openwebui.py"]
-    restart: "no"
     networks:
       - web-research-studio-net
 
@@ -114,7 +83,6 @@ services:
       - web-research-studio-net
 
 volumes:
-  openwebui-data:
   redis-data:
   searxng-config:
   searxng-cache:

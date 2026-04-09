@@ -1,5 +1,6 @@
 """BM25 content filtering checks via the Crawl4AI HTTP API."""
 
+import os
 import sys
 import time
 
@@ -14,7 +15,7 @@ from crawl4ai import (
 from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 
 
-CRAWL4AI_URL = "http://localhost:19235"
+CRAWL4AI_URL = os.getenv("CRAWL4AI_URL", "http://crawl4ai:11235")
 
 
 def build_payload(url, query=None, bm25_threshold=1.0):
@@ -59,15 +60,19 @@ def test_bm25_vs_pruning():
     payload = build_payload(url, query=None)
     start = time.time()
     response = requests.post(f"{CRAWL4AI_URL}/crawl", json=payload, timeout=60)
+    assert response.status_code == 200, response.text[:400]
     pruning_time = time.time() - start
     pruning_content = extract_content(response.json()["results"][0])
+    assert pruning_content
     print(f"Pruning:  {len(pruning_content):>6} chars  ({pruning_time:.1f}s)")
 
     payload = build_payload(url, query=query, bm25_threshold=1.0)
     start = time.time()
     response = requests.post(f"{CRAWL4AI_URL}/crawl", json=payload, timeout=60)
+    assert response.status_code == 200, response.text[:400]
     bm25_time = time.time() - start
     bm25_content = extract_content(response.json()["results"][0])
+    assert bm25_content
     reduction = round((1 - len(bm25_content) / max(len(pruning_content), 1)) * 100, 1)
     print(
         f"BM25@1.0: {len(bm25_content):>6} chars  ({bm25_time:.1f}s)  reduction: {reduction}%"
@@ -75,8 +80,10 @@ def test_bm25_vs_pruning():
 
     payload = build_payload(url, query=query, bm25_threshold=0.5)
     response = requests.post(f"{CRAWL4AI_URL}/crawl", json=payload, timeout=60)
+    assert response.status_code == 200, response.text[:400]
     bm25_loose = extract_content(response.json()["results"][0])
     print(f"BM25@0.5: {len(bm25_loose):>6} chars  (loose)")
+    assert bm25_loose
 
 
 def test_bm25_irrelevant_query():
@@ -86,15 +93,19 @@ def test_bm25_irrelevant_query():
         bm25_threshold=1.0,
     )
     response = requests.post(f"{CRAWL4AI_URL}/crawl", json=payload, timeout=60)
+    assert response.status_code == 200, response.text[:400]
     content = extract_content(response.json()["results"][0])
     print(f"Docker page + 'chocolate cake' query: {len(content)} chars")
+    assert isinstance(content, str)
 
 
 def test_bm25_disabled():
     payload = build_payload("https://example.com", query="test", bm25_threshold=0)
     response = requests.post(f"{CRAWL4AI_URL}/crawl", json=payload, timeout=60)
+    assert response.status_code == 200, response.text[:400]
     content = extract_content(response.json()["results"][0])
     print(f"Content: {len(content)} chars")
+    assert content
 
 
 if __name__ == "__main__":

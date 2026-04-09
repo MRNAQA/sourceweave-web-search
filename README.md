@@ -1,66 +1,69 @@
 # Web Research Studio
 
-Rebranded development repo for the OpenWebUI search and crawl tool.
+Standalone dev repo for a deployment-ready web search and crawl tool.
 
 ## What It Includes
 
-- `web_research_tool.py`: the OpenWebUI tool implementation
-- `docker-compose.yml`: local stack with `openwebui`, `redis`, `crawl4ai`, and `searxng`
-- `docker-compose.source.yml`: optional override to run against a sibling `../open-webui` checkout
-- `tests/`: endpoint-level integration checks for SearXNG and Crawl4AI
+- `web_research_tool.py`: the tool file you can paste into your target app
+- `docker-compose.yml`: local stack with `redis`, `crawl4ai`, `searxng`, and a `tester` container
+- `scripts/run_tool_call.py`: direct model-style invocation harness for `search_and_crawl` and `read_page`
+- `tests/`: standalone integration checks that call the tool directly
+- `skills/web-research-tool-testing/`: repo-local skill describing the local testing workflow
 
 ## Local Setup
 
-1. Install dependencies:
+1. Start the local dependency stack:
 
 ```bash
-uv sync
+docker compose up -d redis searxng crawl4ai
 ```
 
-2. Start the local stack:
+2. Run a direct tool call the same way a model would use it:
 
 ```bash
-docker compose up -d
+docker compose run --rm tester uv run python scripts/run_tool_call.py \
+  --query "python programming" \
+  --depth quick \
+  --read-first-page \
+  --pretty
 ```
 
-3. Open OpenWebUI at `http://localhost:3300`.
+That command instantiates `Tools()`, calls `search_and_crawl(...)`, and optionally follows up with `read_page(...)` using the first returned `page_id`.
 
-The stack bootstraps the `web_research_tool` tool into OpenWebUI automatically after startup.
+## Automated Checks
 
-## Source Debug Mode
-
-Clone the official OpenWebUI repo as a sibling directory:
+Run the standalone runtime checks inside the `tester` container:
 
 ```bash
-git clone https://github.com/open-webui/open-webui ../open-webui
+docker compose run --rm tester uv run pytest tests/test_tool.py
+docker compose run --rm tester uv run python tests/test_phase4.py
 ```
 
-Then run:
+`tests/test_tool.py` verifies the main tool contract:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.source.yml up -d --build
-```
+- `search_and_crawl(query=..., depth=...)` returns results with `page_id`
+- `read_page(page_id)` returns full content
+- cached `page_id` lookups still work from a fresh `Tools()` instance
 
-Use this mode when you need to inspect or patch OpenWebUI internals while iterating on the tool.
+`tests/test_phase4.py` keeps the lower-level Crawl4AI BM25 checks.
 
-## Tests
+## Defaults
 
-Run the endpoint integration checks after the containers are healthy:
+The tool defaults are intentionally aligned with deployment-style container names and ports so you do not need to change valves before deployment:
 
-```bash
-uv run python tests/test_tool.py
-uv run python tests/test_phase4.py
-```
+- SearXNG: `http://searxng:8080/search?format=json&q=<query>`
+- Crawl4AI: `http://crawl4ai:11235`
+- Redis: `redis://redis:6379/2`
+
+The compose file keeps those same service names on the internal Docker network. Host ports are exposed only for optional manual debugging.
 
 Default host ports used by this repo:
 
-- OpenWebUI: `3300`
 - SearXNG: `19080`
 - Crawl4AI: `19235`
 
-The local OpenWebUI stack is configured to use SearXNG for native web search by default.
-
 ## Notes
 
-- The tool defaults SearXNG to `http://searxng:8080/...` to match the local compose stack.
-- Native OpenWebUI search remains enabled in the tool when OpenWebUI internals are importable.
+- The repo is now a standalone local test harness.
+- Paste `web_research_tool.py` into your target app manually when you are ready to deploy.
+- `read_page(page_id)` now falls back to Redis-backed cached page content, so follow-up reads are more stable across fresh tool instances.
