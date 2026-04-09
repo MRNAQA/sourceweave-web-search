@@ -1,6 +1,6 @@
 services:
   redis:
-    image: valkey/valkey:8.0.1-alpine
+    image: valkey/valkey:9-alpine
     command: "valkey-server --save 30 1 --maxclients 10000 --timeout 1800"
     volumes:
       - redis-data:/data
