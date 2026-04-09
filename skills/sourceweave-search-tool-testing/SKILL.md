@@ -1,13 +1,13 @@
 ---
-name: web-research-tool-testing
-description: Use this whenever the user wants to validate `web_research_tool.py` locally before deployment, especially when they mention testing a tool without the target app, simulating model tool calls, checking `search_and_crawl` and `read_page` outputs, or confirming deployment-aligned defaults and valves. This skill should also trigger when the user wants to debug whether the tool will work in deployment without changing service URLs or ports.
+name: sourceweave-search-tool-testing
+description: Use this whenever the user wants to validate `artifacts/sourceweave_web_search.py` locally before deployment, especially when they mention testing a tool without the target app, simulating model tool calls, checking `search_and_crawl` and `read_page` outputs, or confirming deployment-aligned defaults and valves. This skill should also trigger when the user wants to debug whether the tool will work in deployment without changing service URLs or ports.
 ---
 
-# Web Research Tool Testing
+# SourceWeave Web Search Tool Testing
 
 Use this repo as a standalone harness. Do not add the target app back into the local workflow unless the user explicitly asks for it.
 
-The canonical source now lives under `src/web_research_studio/tool.py`; `web_research_tool.py` is the generated standalone OpenWebUI artifact.
+The canonical source now lives under `src/sourceweave_web_search/tool.py`; `artifacts/sourceweave_web_search.py` is the generated standalone OpenWebUI artifact.
 
 ## Goal
 
@@ -41,7 +41,7 @@ docker compose up -d redis searxng crawl4ai
 2. Run a direct model-style tool call from the `tester` container.
 
 ```bash
-docker compose run --rm tester uv run web-research-studio \
+docker compose run --rm tester uv run sourceweave-search \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \

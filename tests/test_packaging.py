@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from web_research_studio.build_openwebui import canonical_tool_path, default_output_path
-from web_research_studio.mcp_server import build_mcp_server
+from sourceweave_web_search.build_openwebui import canonical_tool_path, default_output_path
+from sourceweave_web_search.mcp_server import build_mcp_server
 
 
 def _repo_root() -> Path:
@@ -15,7 +15,7 @@ def _repo_root() -> Path:
 
 def test_openwebui_artifact_is_in_sync() -> None:
     result = subprocess.run(
-        [sys.executable, "scripts/build_openwebui_tool.py", "--check"],
+        [sys.executable, "scripts/build_openwebui_tool.py"],
         cwd=_repo_root(),
         check=False,
         capture_output=True,
@@ -23,6 +23,7 @@ def test_openwebui_artifact_is_in_sync() -> None:
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
+    assert default_output_path().exists(), default_output_path()
     assert default_output_path().read_text(
         encoding="utf-8"
     ) == canonical_tool_path().read_text(encoding="utf-8")
@@ -30,7 +31,7 @@ def test_openwebui_artifact_is_in_sync() -> None:
 
 def test_cli_module_help_smoke() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "web_research_studio.cli", "--help"],
+        [sys.executable, "-m", "sourceweave_web_search.cli", "--help"],
         cwd=_repo_root(),
         check=False,
         capture_output=True,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from web_research_studio.tool import Tools
+from sourceweave_web_search.tool import Tools
 
 
 def _repo_root() -> Path:

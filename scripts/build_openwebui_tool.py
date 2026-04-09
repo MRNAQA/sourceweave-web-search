@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from web_research_studio.build_openwebui import main
+from sourceweave_web_search.build_openwebui import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

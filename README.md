@@ -7,29 +7,29 @@ Web search and crawl tool that ships in two forms:
 
 ## What It Includes
 
-- `src/web_research_studio/tool.py`: canonical tool implementation used by the package, CLI, and MCP server
-- `web_research_tool.py`: generated standalone OpenWebUI artifact copied from `src/web_research_studio/tool.py`
-- `src/web_research_studio/cli.py`: package CLI for direct tool calls
-- `src/web_research_studio/mcp_server.py`: MCP server entry point for `uvx` and MCP clients
-- `src/web_research_studio/build_openwebui.py`: build/check logic for the OpenWebUI artifact
+- `src/sourceweave_web_search/tool.py`: canonical tool implementation used by the package, CLI, and MCP server
+- `artifacts/sourceweave_web_search.py`: generated standalone OpenWebUI artifact copied from `src/sourceweave_web_search/tool.py`
+- `src/sourceweave_web_search/cli.py`: package CLI for direct tool calls
+- `src/sourceweave_web_search/mcp_server.py`: MCP server entry point for `uvx` and MCP clients
+- `src/sourceweave_web_search/build_openwebui.py`: build/check logic for the OpenWebUI artifact
 - `docker-compose.yml`: local stack with `redis`, `crawl4ai`, `searxng`, and a `tester` container
 - `scripts/run_tool_call.py`: thin wrapper around the package CLI for the existing local harness workflow
 - `scripts/build_openwebui_tool.py`: thin wrapper that regenerates or checks the standalone OpenWebUI file
 - `tests/`: standalone integration checks that call the tool directly
-- `skills/web-research-tool-testing/`: repo-local skill describing the local testing workflow
+- `skills/sourceweave-search-tool-testing/`: repo-local skill describing the local testing workflow
 
 ## Architecture
 
 The code under `src/` is the source of truth.
 
-- `src/web_research_studio/tool.py` contains the real implementation.
-- `web_research_tool.py` is an artifact that stays byte-for-byte in sync with it.
+- `src/sourceweave_web_search/tool.py` contains the real implementation.
+- `artifacts/sourceweave_web_search.py` is an artifact generated from it.
 - `search_and_crawl` and batched `read_page` are exposed through both the CLI and MCP server.
 
 Keep edits in the main module and then verify the OpenWebUI artifact is still in sync:
 
 ```bash
-uv run web-research-build-openwebui --check
+uv run sourceweave-build-openwebui --check
 ```
 
 ## Local Setup
@@ -43,7 +43,7 @@ docker compose up -d redis searxng crawl4ai
 2. Run a direct tool call the same way a model would use it:
 
 ```bash
-docker compose run --rm tester uv run web-research-studio \
+docker compose run --rm tester uv run sourceweave-search \
   --query "python programming" \
   --depth quick \
   --read-first-pages 2 \
@@ -67,22 +67,22 @@ docker compose run --rm tester uv run python scripts/run_tool_call.py \
 Run the MCP server from the repo:
 
 ```bash
-uvx --from . web-research-mcp
+uvx --from . sourceweave-search-mcp
 ```
 
 Run the package CLI from the repo:
 
 ```bash
-uvx --from . web-research-studio --query "python programming" --read-first-pages 2
+uvx --from . sourceweave-search --query "python programming" --read-first-pages 2
 ```
 
 For host-side use, prefer explicit runtime overrides instead of changing code:
 
 ```bash
-WEB_RESEARCH_SEARXNG_BASE_URL="http://localhost:19080/search?format=json&q=<query>" \
-WEB_RESEARCH_CRAWL4AI_BASE_URL="http://localhost:19235" \
-WEB_RESEARCH_CACHE_REDIS_URL="redis://localhost:6379/2" \
-uvx --from . web-research-studio --query "python programming" --read-first-pages 2
+SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://localhost:19080/search?format=json&q=<query>" \
+SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://localhost:19235" \
+SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://localhost:6379/2" \
+uvx --from . sourceweave-search --query "python programming" --read-first-pages 2
 ```
 
 ## Automated Checks
@@ -127,6 +127,6 @@ Default host ports used by this repo:
 ## Notes
 
 - The repo now supports both copy/paste OpenWebUI delivery and installable CLI/MCP delivery from the same codebase.
-- Keep manual edits in `src/web_research_studio/tool.py`, then regenerate or check `web_research_tool.py`.
-- Paste `web_research_tool.py` into OpenWebUI when you are ready to deploy the standalone tool file.
+- Keep manual edits in `src/sourceweave_web_search/tool.py`, then regenerate or check `artifacts/sourceweave_web_search.py`.
+- Paste `artifacts/sourceweave_web_search.py` into OpenWebUI when you are ready to deploy the standalone tool file.
 - `read_page(page_ids=[...])` now supports batched page reads and still falls back to Redis-backed cached page content, so follow-up reads are more stable across fresh tool instances.

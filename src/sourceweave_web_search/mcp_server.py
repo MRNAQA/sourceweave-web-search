@@ -3,8 +3,8 @@ from typing import Sequence
 
 from mcp.server.fastmcp import FastMCP
 
-from web_research_studio.config import build_tools
-from web_research_studio.tool import Tools
+from sourceweave_web_search.config import build_tools
+from sourceweave_web_search.tool import Tools
 
 
 def build_mcp_server(tool: Tools | None = None) -> FastMCP:
@@ -56,7 +56,7 @@ def build_mcp_server(tool: Tools | None = None) -> FastMCP:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the SourceWeave web search MCP server."
+        description="Run the SourceWeave Web Search MCP server."
     )
     parser.add_argument(
         "--transport",

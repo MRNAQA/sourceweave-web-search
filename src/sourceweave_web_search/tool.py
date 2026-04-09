@@ -267,7 +267,6 @@ class Tools:
         )
         CRAWL4AI_TIMEOUT: int = Field(default=60)
         CRAWL4AI_BATCH: int = Field(default=5)
-        CRAWL4AI_MAX_URLS: int = Field(default=20)
         CRAWL4AI_EXTERNAL_DOMAINS: bool = Field(default=False)
         CRAWL4AI_EXCLUDE_DOMAINS: str = Field(default="")
         CRAWL4AI_EXCLUDE_SOCIAL_MEDIA_DOMAINS: str = Field(
@@ -278,11 +277,6 @@ class Tools:
         )
         CRAWL4AI_WORD_COUNT_THRESHOLD: int = Field(default=200)
         CRAWL4AI_TEXT_ONLY: bool = Field(default=False)
-        CRAWL4AI_DISPLAY_IMAGES: bool = Field(default=True)
-        CRAWL4AI_MAX_IMAGES: int = Field(default=5)
-        CRAWL4AI_DISPLAY_THUMBNAILS: bool = Field(default=False)
-        CRAWL4AI_THUMBNAIL_SIZE: int = Field(default=200)
-        CRAWL4AI_VALIDATE_IMAGES: bool = Field(default=True)
         CRAWL4AI_MAX_TOKENS: int = Field(default=0)
         BM25_THRESHOLD: float = Field(default=1.0)
         ENABLE_DOCUMENT_CONVERSION: bool = Field(default=True)
@@ -296,11 +290,6 @@ class Tools:
 
     class UserValves(BaseModel):
         SEARXNG_MAX_RESULTS: Optional[int] = Field(default=None)
-        CRAWL4AI_MAX_URLS: Optional[int] = Field(default=None)
-        CRAWL4AI_DISPLAY_IMAGES: Optional[bool] = Field(default=None)
-        CRAWL4AI_MAX_IMAGES: Optional[int] = Field(default=None)
-        CRAWL4AI_DISPLAY_THUMBNAILS: Optional[bool] = Field(default=None)
-        CRAWL4AI_THUMBNAIL_SIZE: Optional[int] = Field(default=None)
 
     def __init__(self):
         self.valves = self.Valves()
@@ -491,35 +480,6 @@ class Tools:
             )
 
         return {"summary": summary, "key_points": key_points}
-
-    async def _validate_image_url(self, url: str) -> bool:
-        try:
-            if not self.valves.CRAWL4AI_VALIDATE_IMAGES:
-                return True
-
-            timeout = aiohttp.ClientTimeout(total=4)
-            headers = {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            async with aiohttp.ClientSession(
-                timeout=timeout,
-                headers=headers,
-                skip_auto_headers={"Accept-Encoding", "Content-Type"},
-            ) as session:
-                async with session.head(url.strip(), allow_redirects=True) as response:
-                    if response.status != 200:
-                        return False
-                    return (
-                        response.headers.get("Content-Type", "")
-                        .lower()
-                        .startswith("image/")
-                    )
-        except Exception:
-            return False
-
-    async def _validate_images_batch(self, urls: List[str]) -> List[str]:
-        results = await asyncio.gather(*[self._validate_image_url(url) for url in urls])
-        return [url for url, is_valid in zip(urls, results) if is_valid]
 
     async def _search_searxng(
         self, query: str, __event_emitter__: EventEmitter = None
@@ -831,7 +791,6 @@ class Tools:
         max_results: Optional[int] = None,
         fresh: bool = False,
         __event_emitter__: EventEmitter = None,
-        __user__: Optional[dict] = None,
     ) -> Union[list, str]:
         logger.info(f"Starting search and crawl for '{query}' (depth={depth})")
         self._cache_stats = {

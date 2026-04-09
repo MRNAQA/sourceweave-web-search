@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
-from web_research_studio.tool import Tools
+from sourceweave_web_search.tool import Tools
 
 
 def _parse_bool(value: str) -> bool:
@@ -34,7 +34,7 @@ class RuntimeOverrides:
         defaults = Tools.Valves()
         overrides: dict[str, Any] = {}
         for field_name in Tools.Valves.model_fields:
-            env_name = f"WEB_RESEARCH_{field_name}"
+            env_name = f"SOURCEWEAVE_SEARCH_{field_name}"
             raw_value = os.getenv(env_name)
             if raw_value is None:
                 continue

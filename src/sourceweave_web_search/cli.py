@@ -3,12 +3,12 @@ import asyncio
 import json
 from typing import Any, Sequence
 
-from web_research_studio.config import build_tools
+from sourceweave_web_search.config import build_tools
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Call the SourceWeave web search tool directly from the package CLI."
+        description="Call the SourceWeave Web Search tool directly from the package CLI."
     )
     parser.add_argument("--query", default="", help="Query for search_and_crawl")
     parser.add_argument(
@@ -46,17 +46,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--searxng-base-url",
         default=None,
-        help="Optional override for SEARXNG_BASE_URL. The WEB_RESEARCH_SEARXNG_BASE_URL env var works too.",
+        help="Optional override for SEARXNG_BASE_URL. The SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL env var works too.",
     )
     parser.add_argument(
         "--crawl4ai-base-url",
         default=None,
-        help="Optional override for CRAWL4AI_BASE_URL. The WEB_RESEARCH_CRAWL4AI_BASE_URL env var works too.",
+        help="Optional override for CRAWL4AI_BASE_URL. The SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL env var works too.",
     )
     parser.add_argument(
         "--cache-redis-url",
         default=None,
-        help="Optional override for CACHE_REDIS_URL. The WEB_RESEARCH_CACHE_REDIS_URL env var works too.",
+        help="Optional override for CACHE_REDIS_URL. The SOURCEWEAVE_SEARCH_CACHE_REDIS_URL env var works too.",
     )
     return parser.parse_args(argv)
 

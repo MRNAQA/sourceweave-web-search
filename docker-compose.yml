@@ -1,4 +1,4 @@
-name: web-research-studio
+name: sourceweave-web-search
 
 services:
   tester:
@@ -22,7 +22,7 @@ services:
     command: ["sleep", "infinity"]
     restart: unless-stopped
     networks:
-      - web-research-studio-net
+      - sourceweave-web-search-net
 
   redis:
     image: valkey/valkey:8.0.1-alpine
@@ -37,7 +37,7 @@ services:
       retries: 5
     restart: unless-stopped
     networks:
-      - web-research-studio-net
+      - sourceweave-web-search-net
 
   crawl4ai:
     image: unclecode/crawl4ai:latest
@@ -53,7 +53,7 @@ services:
       start_period: 30s
     restart: unless-stopped
     networks:
-      - web-research-studio-net
+      - sourceweave-web-search-net
 
   searxng:
     image: searxng/searxng:latest
@@ -82,7 +82,7 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - web-research-studio-net
+      - sourceweave-web-search-net
 
 volumes:
   redis-data:
@@ -90,5 +90,5 @@ volumes:
   searxng-cache:
 
 networks:
-  web-research-studio-net:
+  sourceweave-web-search-net:
     driver: bridge

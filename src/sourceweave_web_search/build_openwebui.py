@@ -8,7 +8,7 @@ def canonical_tool_path() -> Path:
 
 
 def default_output_path() -> Path:
-    return canonical_tool_path().parents[2] / "web_research_tool.py"
+    return canonical_tool_path().parents[2] / "artifacts" / "sourceweave_web_search.py"
 
 
 def build_openwebui_artifact(
@@ -20,6 +20,7 @@ def build_openwebui_artifact(
     if check:
         return target.exists() and target.read_text(encoding="utf-8") == source
 
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source, encoding="utf-8")
     return True
 
@@ -31,7 +32,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Exit non-zero if web_research_tool.py is out of sync with src/web_research_studio/tool.py.",
+        help="Exit non-zero if artifacts/sourceweave_web_search.py is out of sync with src/sourceweave_web_search/tool.py.",
     )
     parser.add_argument(
         "--output",
