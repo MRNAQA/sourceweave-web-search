@@ -701,8 +701,8 @@ class Tools:
                 {
                     "type": "status",
                     "data": {
-                        "description": f"Reading: {record['title'][:60]}...",
-                        "done": False,
+                        "description": f"Read {record['title'][:60]}...",
+                        "done": True,
                     },
                 }
             )
