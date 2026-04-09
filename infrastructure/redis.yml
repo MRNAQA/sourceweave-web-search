@@ -2,6 +2,8 @@ services:
   redis:
     image: valkey/valkey:9-alpine
     command: "valkey-server --save 30 1 --maxclients 10000 --timeout 1800"
+    ports:
+      - "16379:6379"
     volumes:
       - redis-data:/data
     healthcheck:

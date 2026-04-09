@@ -12,18 +12,19 @@ Two-tool architecture:
     read_page(page_ids, focus?)    -> full page content for one or more pages (batch related reads when needed)
 
 Full content is stored in an in-process PageStore and cached in Valkey/Redis.
-BM25 scoring is used for summary generation and focused reads, not for filtering stored content.
+BM25-style scoring is used for pre-crawl ranking, post-crawl reranking, summary generation, and focused reads.
 Supports HTML pages (via Crawl4AI) and documents (PDF/DOCX/etc via MarkItDown).
 """
 
 import asyncio
+from collections import Counter
 import hashlib
 import json
 import re
 import time
 import traceback
 from typing import Any, Awaitable, Callable, List, Literal, Optional, Union
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 import aiohttp
 from loguru import logger
@@ -52,6 +53,35 @@ _TTL_RULES = [
     ("reuters.", 600),
 ]
 _DEFAULT_PAGE_TTL = 1800
+
+_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "what",
+    "when",
+    "where",
+    "with",
+}
 
 EventEmitter = Optional[Callable[[dict[str, Any]], Awaitable[Any]]]
 
@@ -255,13 +285,13 @@ class Tools:
         INITIAL_RESPONSE: str = Field(default="")
         SEARCH_WITH_SEARXNG: bool = Field(default=True)
         SEARXNG_BASE_URL: str = Field(
-            default="http://searxng:8080/search?format=json&q=<query>"
+            default="http://127.0.0.1:19080/search?format=json&q=<query>"
         )
         SEARXNG_API_TOKEN: str = Field(default="")
         SEARXNG_METHOD: Literal["GET", "POST"] = Field(default="GET")
         SEARXNG_TIMEOUT: int = Field(default=30)
         SEARXNG_MAX_RESULTS: int = Field(default=10)
-        CRAWL4AI_BASE_URL: str = Field(default="http://crawl4ai:11235")
+        CRAWL4AI_BASE_URL: str = Field(default="http://127.0.0.1:19235")
         CRAWL4AI_USER_AGENT: str = Field(
             default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.1.2.3 Safari/537.36"
         )
@@ -284,7 +314,7 @@ class Tools:
         DOCUMENT_FETCH_TIMEOUT: int = Field(default=20)
         DEADLINE_SECONDS: int = Field(default=60)
         CACHE_ENABLED: bool = Field(default=True)
-        CACHE_REDIS_URL: str = Field(default="redis://redis:6379/2")
+        CACHE_REDIS_URL: str = Field(default="redis://127.0.0.1:16379/2")
         MORE_STATUS: bool = Field(default=False)
         DEBUG: bool = Field(default=False)
 
@@ -311,9 +341,27 @@ class Tools:
             )
 
         self._depth_budgets = {
-            "quick": {"max_urls": 3, "search_timeout": 5, "deadline_s": 15},
-            "normal": {"max_urls": 10, "search_timeout": 6, "deadline_s": 30},
-            "deep": {"max_urls": 25, "search_timeout": 8, "deadline_s": 55},
+            "quick": {
+                "search_candidates": 12,
+                "crawl_limit": 4,
+                "return_limit": 4,
+                "search_timeout": 5,
+                "deadline_s": 15,
+            },
+            "normal": {
+                "search_candidates": 24,
+                "crawl_limit": 10,
+                "return_limit": 6,
+                "search_timeout": 6,
+                "deadline_s": 30,
+            },
+            "deep": {
+                "search_candidates": 50,
+                "crawl_limit": 16,
+                "return_limit": 10,
+                "search_timeout": 8,
+                "deadline_s": 55,
+            },
         }
         self.tools = [
             {
@@ -323,6 +371,7 @@ class Tools:
                     "description": (
                         "Search the web and crawl pages. Returns compact summaries with page_ids. "
                         "If summaries are not enough, batch one or more page_ids into read_page(page_ids=[...]) for full content. "
+                        "Prefer concise retrieval-style queries, quote exact error strings, and use site: when domain preference matters. "
                         "Prefer one batched read_page call over repeated single-page calls when comparing multiple sources."
                     ),
                     "parameters": {
@@ -330,7 +379,10 @@ class Tools:
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "The search query",
+                                "description": (
+                                    "The search query. Prefer concise noun phrases over conversational filler, quote exact errors, "
+                                    "and add site: filters when you want a specific domain."
+                                ),
                             },
                             "urls": {
                                 "type": "array",
@@ -481,16 +533,648 @@ class Tools:
 
         return {"summary": summary, "key_points": key_points}
 
+    @staticmethod
+    def _normalize_query(query: str) -> str:
+        return re.sub(r"\s+", " ", (query or "").strip())
+
+    @staticmethod
+    def _tokenize_text(text: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+    def _query_terms(self, query: str) -> list[str]:
+        return [
+            term
+            for term in self._tokenize_text(query)
+            if term and term not in _QUERY_STOPWORDS
+        ]
+
+    @staticmethod
+    def _quoted_phrases(query: str) -> list[str]:
+        return [phrase.strip() for phrase in re.findall(r'"([^"]+)"', query or "")]
+
+    def _score_text_relevance(self, query: str, text: str) -> float:
+        if not query or not text:
+            return 0.0
+
+        query_terms = self._query_terms(query)
+        if not query_terms:
+            return 0.0
+
+        text_lower = text.lower()
+        tokens = self._tokenize_text(text_lower)
+        if not tokens:
+            return 0.0
+
+        counts = Counter(tokens)
+        unique_hits = sum(1 for term in set(query_terms) if counts.get(term, 0) > 0)
+        density = sum(counts.get(term, 0) for term in query_terms) / max(len(tokens), 1)
+        bigram_hits = sum(
+            1
+            for first, second in zip(query_terms, query_terms[1:])
+            if f"{first} {second}" in text_lower
+        )
+        phrase_hits = sum(
+            1 for phrase in self._quoted_phrases(query) if phrase.lower() in text_lower
+        )
+        return round(
+            unique_hits * 1.25 + density * 25.0 + bigram_hits * 0.8 + phrase_hits * 1.5,
+            4,
+        )
+
+    @staticmethod
+    def _url_text(url: str) -> str:
+        parsed = urlparse(url)
+        host_parts = [
+            part
+            for part in re.split(r"[^a-z0-9]+", parsed.netloc.lower())
+            if part and part not in {"www", "com", "org", "net", "io", "co"}
+        ]
+        path_parts = [
+            part for part in re.split(r"[^a-z0-9]+", parsed.path.lower()) if part
+        ]
+        return " ".join(host_parts + path_parts)
+
+    def _detect_query_intents(self, query: str) -> set[str]:
+        normalized = self._normalize_query(query).lower()
+        intents = set()
+
+        if any(token in normalized for token in ("reddit", "forum", "discussion")):
+            intents.add("reddit")
+        if any(
+            token in normalized
+            for token in ("docs", "documentation", "developer", "reference", "manual")
+        ):
+            intents.add("docs")
+        if any(token in normalized for token in ("api", "sdk", "graphql", "openapi")):
+            intents.add("api")
+        if any(
+            token in normalized
+            for token in ("historical", "history", "archive", "time series", "timeseries")
+        ):
+            intents.add("historical")
+        if "free" in normalized or "open source" in normalized or "open-source" in normalized:
+            intents.add("free")
+        if any(
+            token in normalized
+            for token in ("no key", "without key", "no api key", "without api key")
+        ):
+            intents.add("no_key")
+        if '"' in normalized or "error" in normalized or "exception" in normalized:
+            intents.add("error")
+        return intents
+
+    def _generate_query_variants(self, query: str) -> list[str]:
+        normalized = self._normalize_query(query)
+        if not normalized:
+            return []
+
+        variants = [normalized]
+        reduced_terms = self._query_terms(normalized)
+        reduced_variant_parts = [
+            f'"{phrase}"' for phrase in self._quoted_phrases(normalized) if phrase
+        ]
+        reduced_variant_parts.extend(reduced_terms)
+        reduced_variant = " ".join(dict.fromkeys(reduced_variant_parts))
+        if reduced_variant and reduced_variant.lower() != normalized.lower():
+            variants.append(reduced_variant)
+
+        intents = self._detect_query_intents(normalized)
+        if "site:" not in normalized.lower() and (
+            "reddit" in intents
+            or "free" in intents
+            or "no_key" in intents
+            or "historical" in intents
+        ):
+            site_variant = f"site:reddit.com {reduced_variant or normalized}"
+            if site_variant.lower() not in {variant.lower() for variant in variants}:
+                variants.append(site_variant)
+
+        return variants[:3]
+
+    def _build_candidate(
+        self,
+        url: str,
+        *,
+        title: str = "",
+        snippet: str = "",
+        search_rank: Optional[int] = None,
+        engine: Optional[str] = None,
+        source_type: str = "search_result",
+        discovered_from: Optional[str] = None,
+        retrieved_by_queries: Optional[list[str]] = None,
+        rank_fusion_score: float = 0.0,
+    ) -> dict[str, Any]:
+        return {
+            "url": url,
+            "title": title or "",
+            "snippet": snippet or "",
+            "search_rank": search_rank,
+            "engine": engine,
+            "source_type": source_type,
+            "discovered_from": discovered_from,
+            "retrieved_by_queries": retrieved_by_queries or [],
+            "rank_fusion_score": rank_fusion_score,
+            "pre_crawl_score": 0.0,
+        }
+
+    def _normalize_cached_search_candidates(self, payload: Any, query: str) -> list[dict]:
+        candidates = []
+        if not isinstance(payload, list):
+            return candidates
+
+        for index, item in enumerate(payload, start=1):
+            if isinstance(item, str):
+                candidate = self._build_candidate(item, search_rank=index)
+            elif isinstance(item, dict):
+                item_dict: dict[str, Any] = {
+                    str(key): value for key, value in item.items()
+                }
+                raw_url = item_dict.get("url")
+                if not isinstance(raw_url, str) or not raw_url:
+                    continue
+
+                raw_search_rank = item_dict.get("search_rank")
+                search_rank = (
+                    raw_search_rank if isinstance(raw_search_rank, int) else None
+                )
+                raw_engine = item_dict.get("engine")
+                engine = raw_engine if isinstance(raw_engine, str) else None
+                raw_discovered_from = item_dict.get("discovered_from")
+                discovered_from = (
+                    raw_discovered_from
+                    if isinstance(raw_discovered_from, str)
+                    else None
+                )
+                raw_queries = item_dict.get("retrieved_by_queries")
+                retrieved_by_queries = (
+                    [value for value in raw_queries if isinstance(value, str)]
+                    if isinstance(raw_queries, list)
+                    else []
+                )
+                raw_rank_fusion_score = item_dict.get("rank_fusion_score")
+                rank_fusion_score = (
+                    float(raw_rank_fusion_score)
+                    if isinstance(raw_rank_fusion_score, (int, float))
+                    else 0.0
+                )
+                candidate = self._build_candidate(
+                    raw_url,
+                    title=str(item_dict.get("title", "") or ""),
+                    snippet=str(item_dict.get("snippet", "") or ""),
+                    search_rank=search_rank,
+                    engine=engine,
+                    source_type=str(
+                        item_dict.get("source_type", "search_result") or "search_result"
+                    ),
+                    discovered_from=discovered_from,
+                    retrieved_by_queries=retrieved_by_queries,
+                    rank_fusion_score=rank_fusion_score,
+                )
+            else:
+                continue
+            candidates.append(candidate)
+
+        for candidate in candidates:
+            candidate["pre_crawl_score"] = round(
+                self._score_search_candidate(candidate, query), 4
+            )
+
+        return sorted(
+            candidates,
+            key=lambda item: (
+                item.get("pre_crawl_score", 0.0),
+                item.get("rank_fusion_score", 0.0),
+                -(item.get("search_rank") or 10_000),
+            ),
+            reverse=True,
+        )
+
+    def _candidate_heuristic_score(self, candidate: dict, query: str) -> float:
+        url = candidate.get("url", "")
+        parsed = urlparse(url)
+        path = (parsed.path or "/").lower()
+        host = parsed.netloc.lower()
+        text = " ".join(
+            part
+            for part in (
+                candidate.get("title", ""),
+                candidate.get("snippet", ""),
+                self._url_text(url),
+            )
+            if part
+        ).lower()
+        lexical_score = self._score_text_relevance(
+            query, f"{candidate.get('title', '')} {candidate.get('snippet', '')}"
+        )
+        intents = self._detect_query_intents(query)
+        score = 0.0
+
+        if path in {"", "/"}:
+            score -= 2.5
+            if lexical_score < 2.0:
+                score -= 2.0
+
+        if any(
+            token in text or token in path
+            for token in (
+                "pricing",
+                "plans",
+                "contact sales",
+                "contact-sales",
+                "signup",
+                "sign up",
+                "sign-in",
+                "login",
+                "register",
+                "about",
+                "careers",
+                "privacy",
+                "terms",
+            )
+        ):
+            score -= 1.5
+
+        if any(marker in host for marker in ("docs.", "developer.", "api.")):
+            score += 2.0
+        if any(
+            marker in path
+            for marker in (
+                "/docs",
+                "/api",
+                "/reference",
+                "/guide",
+                "/tutorial",
+                "/developers",
+                "/developer",
+                "/sdk",
+            )
+        ):
+            score += 1.5
+
+        if candidate.get("snippet") and len(candidate["snippet"].strip()) < 40:
+            score -= 0.5
+
+        if "reddit" in intents and "reddit.com" in host:
+            score += 4.0
+        if "docs" in intents and (
+            any(marker in host for marker in ("docs.", "developer.", "api."))
+            or any(
+                marker in path
+                for marker in ("/docs", "/reference", "/developers", "/manual")
+            )
+        ):
+            score += 2.5
+        if "api" in intents and "api" in text:
+            score += 1.5
+        if "historical" in intents and any(
+            marker in text for marker in ("historical", "history", "archive", "time series")
+        ):
+            score += 2.0
+        if "free" in intents and any(
+            marker in text
+            for marker in ("free", "open source", "open-source", "open data", "community")
+        ):
+            score += 1.5
+        if "free" in intents and any(
+            marker in text for marker in ("pricing", "plans", "enterprise", "contact sales")
+        ):
+            score -= 2.0
+        if "no_key" in intents and any(
+            marker in text
+            for marker in (
+                "no api key",
+                "without api key",
+                "no key",
+                "unauthenticated",
+                "anonymous",
+            )
+        ):
+            score += 3.0
+        if "no_key" in intents and any(
+            marker in text
+            for marker in (
+                "api key required",
+                "requires api key",
+                "sign up",
+                "signup",
+                "register",
+            )
+        ):
+            score -= 2.5
+
+        return score
+
+    def _score_search_candidate(self, candidate: dict, query: str) -> float:
+        if candidate.get("source_type") == "explicit_url":
+            return 100.0 + self._score_text_relevance(query, self._url_text(candidate["url"]))
+
+        title_score = self._score_text_relevance(query, candidate.get("title", ""))
+        snippet_score = self._score_text_relevance(query, candidate.get("snippet", ""))
+        url_score = self._score_text_relevance(query, self._url_text(candidate["url"]))
+        search_rank = candidate.get("search_rank") or 99
+        score = title_score * 3.0
+        score += snippet_score * 2.0
+        score += url_score * 1.25
+        score += 6.0 / max(search_rank, 1)
+        score += float(candidate.get("rank_fusion_score", 0.0) or 0.0) * 120.0
+        score += self._candidate_heuristic_score(candidate, query)
+        return round(score, 4)
+
+    def _merge_search_candidates(
+        self, query: str, query_results: list[tuple[str, list[dict[str, Any]]]]
+    ) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+
+        for query_variant, results in query_results:
+            for rank, raw_candidate in enumerate(results, start=1):
+                url = raw_candidate.get("url")
+                if not url:
+                    continue
+
+                canonical = self._canonicalize_url(url)
+                entry = merged.get(canonical)
+                if entry is None:
+                    entry = self._build_candidate(
+                        url,
+                        title=str(raw_candidate.get("title", "") or ""),
+                        snippet=str(raw_candidate.get("snippet", "") or ""),
+                        search_rank=raw_candidate.get("search_rank") or rank,
+                        engine=raw_candidate.get("engine"),
+                        source_type=str(
+                            raw_candidate.get("source_type", "search_result")
+                            or "search_result"
+                        ),
+                        discovered_from=raw_candidate.get("discovered_from"),
+                        retrieved_by_queries=[],
+                        rank_fusion_score=0.0,
+                    )
+                    merged[canonical] = entry
+
+                if raw_candidate.get("title") and len(raw_candidate["title"]) > len(
+                    entry.get("title", "")
+                ):
+                    entry["title"] = raw_candidate["title"]
+                if raw_candidate.get("snippet") and len(raw_candidate["snippet"]) > len(
+                    entry.get("snippet", "")
+                ):
+                    entry["snippet"] = raw_candidate["snippet"]
+                if raw_candidate.get("search_rank"):
+                    current_rank = entry.get("search_rank")
+                    candidate_rank = int(raw_candidate["search_rank"])
+                    entry["search_rank"] = (
+                        min(current_rank, candidate_rank)
+                        if current_rank is not None
+                        else candidate_rank
+                    )
+                if query_variant and query_variant not in entry["retrieved_by_queries"]:
+                    entry["retrieved_by_queries"].append(query_variant)
+                if raw_candidate.get("engine"):
+                    engines = {
+                        engine.strip()
+                        for engine in str(entry.get("engine") or "").split(",")
+                        if engine.strip()
+                    }
+                    engines.update(
+                        engine.strip()
+                        for engine in str(raw_candidate["engine"]).split(",")
+                        if engine.strip()
+                    )
+                    entry["engine"] = ", ".join(sorted(engines)) if engines else None
+                entry["rank_fusion_score"] = float(entry["rank_fusion_score"]) + (
+                    1.0 / (50 + rank)
+                )
+
+        candidates = list(merged.values())
+        for candidate in candidates:
+            candidate["pre_crawl_score"] = round(
+                self._score_search_candidate(candidate, query), 4
+            )
+
+        return sorted(
+            candidates,
+            key=lambda item: (
+                item.get("pre_crawl_score", 0.0),
+                item.get("rank_fusion_score", 0.0),
+                -(item.get("search_rank") or 10_000),
+            ),
+            reverse=True,
+        )
+
+    def _merge_explicit_candidates(
+        self, query: str, candidates: list[dict], urls: Optional[list[str]]
+    ) -> list[dict]:
+        merged = {
+            self._canonicalize_url(candidate["url"]): dict(candidate)
+            for candidate in candidates
+            if candidate.get("url")
+        }
+
+        for raw_url in urls or []:
+            url = raw_url if raw_url.startswith("http") else f"https://{raw_url}"
+            canonical = self._canonicalize_url(url)
+            existing = merged.get(canonical)
+            if existing is None:
+                merged[canonical] = self._build_candidate(url, source_type="explicit_url")
+            else:
+                existing["source_type"] = "explicit_url"
+                existing["url"] = url
+
+        merged_candidates = list(merged.values())
+        for candidate in merged_candidates:
+            candidate["pre_crawl_score"] = round(
+                self._score_search_candidate(candidate, query), 4
+            )
+
+        return merged_candidates
+
+    def _rank_candidates(self, candidates: list[dict], max_per_domain: int = 3) -> list[dict]:
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                item.get("pre_crawl_score", 0.0),
+                item.get("rank_fusion_score", 0.0),
+                -(item.get("search_rank") or 10_000),
+            ),
+            reverse=True,
+        )
+
+        seen_canonical = set()
+        domain_counts: dict[str, int] = {}
+        diversified = []
+        for candidate in ranked:
+            url = candidate.get("url")
+            if not url or self._classify_url(url) == "skip":
+                continue
+
+            canonical = self._canonicalize_url(url)
+            if canonical in seen_canonical:
+                continue
+            seen_canonical.add(canonical)
+
+            host = urlparse(url).netloc.lower().lstrip("www.")
+            if (
+                candidate.get("source_type") != "explicit_url"
+                and domain_counts.get(host, 0) >= max_per_domain
+            ):
+                continue
+
+            domain_counts[host] = domain_counts.get(host, 0) + 1
+            diversified.append(candidate)
+
+        return diversified
+
+    def _enrich_crawl_result(
+        self, result: dict, query: str, candidate: Optional[dict], content: str
+    ) -> dict:
+        enriched = {key: value for key, value in result.items() if not key.startswith("_")}
+        content_length = enriched.get("content_length", len(content))
+        content_type = enriched.get("content_type") or (
+            "document" if self._classify_url(enriched["url"]) == "document" else "html"
+        )
+        search_title = candidate.get("title", "") if candidate else ""
+        search_snippet = candidate.get("snippet", "") if candidate else ""
+        search_context = " ".join(part for part in (search_title, search_snippet) if part)
+
+        content_score = self._score_text_relevance(query, content[:8000])
+        title_score = self._score_text_relevance(query, enriched.get("title", ""))
+        consistency_score = (
+            self._score_text_relevance(search_context, enriched.get("title", ""))
+            + self._score_text_relevance(search_context, enriched.get("summary", ""))
+            if search_context
+            else 0.0
+        )
+
+        base_score = float(candidate.get("pre_crawl_score", 0.0) if candidate else 0.0) * 0.35
+        base_score += content_score * 3.2
+        base_score += title_score * 1.8
+        base_score += consistency_score * 0.75
+
+        if content_length < 120:
+            base_score -= 8.0
+        elif content_length < 300:
+            base_score -= 3.5
+
+        parsed = urlparse(enriched["url"])
+        if (parsed.path or "/") in {"", "/"} and content_score < 2.0:
+            base_score -= 2.0
+
+        if candidate and candidate.get("source_type") == "explicit_url":
+            base_score += 2.0
+
+        enriched.update(
+            {
+                "source_type": (
+                    candidate.get("source_type")
+                    if candidate
+                    else enriched.get("source_type", "search_result")
+                ),
+                "content_type": content_type,
+                "search_rank": candidate.get("search_rank") if candidate else None,
+                "search_title": search_title,
+                "search_snippet": search_snippet,
+                "pre_crawl_score": round(
+                    float(candidate.get("pre_crawl_score", 0.0) if candidate else 0.0), 4
+                ),
+                "rank_fusion_score": round(
+                    float(candidate.get("rank_fusion_score", 0.0) if candidate else 0.0), 4
+                ),
+                "engine": candidate.get("engine") if candidate else None,
+                "retrieved_by_queries": (
+                    list(candidate.get("retrieved_by_queries", [])) if candidate else []
+                ),
+                "discovered_from": candidate.get("discovered_from") if candidate else None,
+                "post_crawl_score": round(base_score, 4),
+            }
+        )
+        enriched["_post_crawl_base_score"] = base_score
+        enriched["_content_match_score"] = content_score
+        return enriched
+
+    async def _finalize_crawl_results(
+        self,
+        crawl_results: list[dict],
+        query: str,
+        candidates_by_url: dict[str, dict],
+        return_limit: int,
+    ) -> list[dict]:
+        enriched_results = []
+        for raw_result in crawl_results:
+            content = raw_result.get("_content", "")
+            if not content and raw_result.get("page_id"):
+                stored = await self._load_page_record(raw_result["page_id"])
+                content = stored.get("content", "") if stored else ""
+
+            candidate = candidates_by_url.get(
+                self._canonicalize_url(raw_result.get("url", ""))
+            )
+            enriched_results.append(
+                self._enrich_crawl_result(raw_result, query, candidate, content)
+            )
+
+        pre_sorted = sorted(
+            enriched_results,
+            key=lambda item: (
+                item.get("_post_crawl_base_score", 0.0),
+                item.get("pre_crawl_score", 0.0),
+            ),
+            reverse=True,
+        )
+
+        ranked_results = []
+        domain_counts: dict[str, int] = {}
+        for item in pre_sorted:
+            host = urlparse(item["url"]).netloc.lower().lstrip("www.")
+            domain_penalty = domain_counts.get(host, 0) * 1.25
+            final_score = item.get("_post_crawl_base_score", 0.0) - domain_penalty
+            content_match = item.get("_content_match_score", 0.0)
+
+            if (
+                item.get("source_type") != "explicit_url"
+                and item.get("content_length", 0) < 120
+                and final_score < 6.0
+            ):
+                continue
+            if (
+                item.get("source_type") != "explicit_url"
+                and content_match <= 0.0
+                and item.get("pre_crawl_score", 0.0) < 5.0
+            ):
+                continue
+
+            item["post_crawl_score"] = round(final_score, 4)
+            item.pop("_post_crawl_base_score", None)
+            item.pop("_content_match_score", None)
+            ranked_results.append(item)
+            domain_counts[host] = domain_counts.get(host, 0) + 1
+
+        if not ranked_results:
+            ranked_results = pre_sorted
+            for item in ranked_results:
+                item.pop("_post_crawl_base_score", None)
+                item.pop("_content_match_score", None)
+
+        return sorted(
+            ranked_results,
+            key=lambda item: (
+                item.get("post_crawl_score", 0.0),
+                item.get("pre_crawl_score", 0.0),
+            ),
+            reverse=True,
+        )[:return_limit]
+
     async def _search_searxng(
-        self, query: str, __event_emitter__: EventEmitter = None
-    ) -> List[str]:
+        self,
+        query: str,
+        __event_emitter__: EventEmitter = None,
+    ) -> List[dict[str, Any]]:
         if not self.valves.SEARCH_WITH_SEARXNG and self.valves.DEBUG:
             logger.info("SearXNG search is disabled.")
             return []
         if not self.valves.SEARXNG_BASE_URL:
             return []
 
-        url = self.valves.SEARXNG_BASE_URL.replace("<query>", query)
+        normalized_query = self._normalize_query(query)
+        url = self.valves.SEARXNG_BASE_URL.replace("<query>", quote_plus(normalized_query))
         headers = {
             "Accept": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -515,9 +1199,32 @@ class Tools:
             max_results = (
                 self.user_valves.SEARXNG_MAX_RESULTS or self.valves.SEARXNG_MAX_RESULTS
             )
-            return [
-                result["url"] for result in results[:max_results] if result.get("url")
-            ]
+            structured_results = []
+            for rank, result in enumerate(results[:max_results], start=1):
+                if not result.get("url"):
+                    continue
+                engines = result.get("engines") or []
+                if isinstance(engines, list):
+                    engine = ", ".join(engine for engine in engines if engine)
+                else:
+                    engine = str(engines or "")
+                structured_results.append(
+                    self._build_candidate(
+                        result["url"],
+                        title=str(result.get("title", "") or ""),
+                        snippet=str(
+                            result.get("content")
+                            or result.get("snippet")
+                            or result.get("description")
+                            or ""
+                        ),
+                        search_rank=rank,
+                        engine=result.get("engine") or engine or None,
+                        source_type="search_result",
+                        retrieved_by_queries=[normalized_query],
+                    )
+                )
+            return structured_results
         except Exception as exc:
             logger.error(f"Error searching SearXNG: {exc}")
             return []
@@ -576,7 +1283,7 @@ class Tools:
     def _search_cache_key(self, query: str) -> str:
         providers = []
         if self.valves.SEARCH_WITH_SEARXNG:
-            providers.append("searxng")
+            providers.append("searxng:v2")
         provider_str = "+".join(sorted(providers)) or "none"
         normalized = re.sub(r"\s+", " ", query.strip().lower())
         tokens = normalized.split()
@@ -809,20 +1516,13 @@ class Tools:
         def time_left():
             return max(0.0, deadline - time.monotonic())
 
-        effective_max_results = min(
-            max_results or budget["max_urls"], budget["max_urls"]
+        effective_return_limit = min(
+            max_results or budget["return_limit"], budget["return_limit"]
         )
-        gathered_urls = []
+        query = self._normalize_query(query)
         self.crawl_counter = 0
         self.content_counter = 0
         self.total_urls = 0
-
-        if urls:
-            for url in urls:
-                if not url.startswith("http"):
-                    url = f"https://{url}"
-                if url not in gathered_urls:
-                    gathered_urls.append(url)
 
         if __event_emitter__ and str(self.valves.INITIAL_RESPONSE).strip() != "":
             await __event_emitter__(
@@ -834,57 +1534,73 @@ class Tools:
 
         search_cache_key = self._search_cache_key(query)
         cached_search = None if fresh else await self._cache.get(search_cache_key)
+        search_candidates: list[dict[str, Any]] = []
         if cached_search:
-            cached_urls = json.loads(cached_search)
-            for url in cached_urls[:effective_max_results]:
-                if url not in gathered_urls:
-                    gathered_urls.append(url)
             self._cache_stats["search_hits"] += 1
+            try:
+                search_candidates = self._normalize_cached_search_candidates(
+                    json.loads(cached_search), query
+                )
+            except Exception:
+                search_candidates = []
         else:
             self._cache_stats["search_misses"] += 1
-            all_search_urls = []
-            search_tasks = []
-            if self.valves.SEARCH_WITH_SEARXNG:
-                search_tasks.append(self._search_searxng(query, __event_emitter__))
+            query_variants = self._generate_query_variants(query)
+            search_tasks = (
+                [
+                    self._search_searxng(query_variant, __event_emitter__)
+                    for query_variant in query_variants
+                ]
+                if self.valves.SEARCH_WITH_SEARXNG
+                else []
+            )
             if search_tasks:
                 try:
                     search_results = await asyncio.wait_for(
                         asyncio.gather(*search_tasks, return_exceptions=True),
                         timeout=min(budget["search_timeout"], time_left()),
                     )
-                    for result in search_results:
+                    merged_query_results = []
+                    for query_variant, result in zip(query_variants, search_results):
                         if isinstance(result, list):
-                            for url in result:
-                                if url not in all_search_urls:
-                                    all_search_urls.append(url)
+                            merged_query_results.append((query_variant, result))
+                    search_candidates = self._merge_search_candidates(
+                        query, merged_query_results
+                    )
                 except asyncio.TimeoutError:
                     logger.warning(
                         "Search providers timed out, proceeding with what we have"
                     )
-            if all_search_urls:
+            if search_candidates:
                 await self._cache.setex(
-                    search_cache_key, 600, json.dumps(all_search_urls)
+                    search_cache_key, 600, json.dumps(search_candidates)
                 )
-            for url in all_search_urls[:effective_max_results]:
-                if url not in gathered_urls:
-                    gathered_urls.append(url)
 
-        all_processable = [
-            url for url in gathered_urls if self._classify_url(url) != "skip"
-        ]
-        max_per_domain = 2 if depth in ("quick", "normal") else 3
-        all_processable = self._dedupe_and_diversify(
-            all_processable, max_per_domain=max_per_domain
+        ranked_candidates = self._rank_candidates(
+            self._merge_explicit_candidates(query, search_candidates, urls),
+            max_per_domain=2 if depth in ("quick", "normal") else 3,
         )
-        all_processable = all_processable[:effective_max_results]
-        if not all_processable:
+        ranked_candidates = ranked_candidates[: budget["search_candidates"]]
+        self.total_urls = len(ranked_candidates)
+        if not ranked_candidates:
             return f"No URLs found to crawl for the query: {query}."
 
+        crawl_limit = max(
+            budget["crawl_limit"], effective_return_limit, len(urls or [])
+        )
         crawl_results = []
-        urls_to_fetch = []
-        for url in all_processable:
+        candidates_by_url = {}
+        candidates_to_fetch = []
+        for candidate in ranked_candidates:
+            if len(crawl_results) + len(candidates_to_fetch) >= crawl_limit:
+                break
+
+            url = candidate["url"]
+            canonical = self._canonicalize_url(url)
+            candidates_by_url[canonical] = candidate
+
             if fresh:
-                urls_to_fetch.append(url)
+                candidates_to_fetch.append(candidate)
                 continue
             if await self._cache.exists(self._dead_cache_key(url)):
                 self._cache_stats["negative_skips"] += 1
@@ -908,30 +1624,36 @@ class Tools:
                             "content_length": len(record["content"]),
                             "images": [],
                             "from_cache": True,
+                            "content_type": (
+                                "document"
+                                if self._classify_url(record["url"]) == "document"
+                                else "html"
+                            ),
+                            "_content": record["content"],
                         }
                     )
                     continue
                 except Exception:
                     pass
             self._cache_stats["page_misses"] += 1
-            urls_to_fetch.append(url)
+            candidates_to_fetch.append(candidate)
 
-        html_urls = []
-        document_urls = []
-        for url in urls_to_fetch:
-            if self._classify_url(url) == "document":
-                document_urls.append(url)
+        html_candidates = []
+        document_candidates = []
+        for candidate in candidates_to_fetch:
+            if self._classify_url(candidate["url"]) == "document":
+                document_candidates.append(candidate)
             else:
-                html_urls.append(url)
+                html_candidates.append(candidate)
 
-        for i in range(0, len(html_urls), self.valves.CRAWL4AI_BATCH):
+        for i in range(0, len(html_candidates), self.valves.CRAWL4AI_BATCH):
             remaining = time_left()
             if remaining < 2.0:
                 break
-            batch = html_urls[i : i + self.valves.CRAWL4AI_BATCH]
+            batch = html_candidates[i : i + self.valves.CRAWL4AI_BATCH]
             try:
                 crawled_batch = await self._crawl_url(
-                    urls=batch,
+                    urls=[candidate["url"] for candidate in batch],
                     query=query,
                     timeout_s=min(
                         remaining - 1, self.valves.CRAWL4AI_TIMEOUT * len(batch)
@@ -942,17 +1664,16 @@ class Tools:
             except Exception as exc:
                 logger.error(f"Batch crawl error: {exc}\n{traceback.format_exc()}")
 
-        if document_urls and depth != "quick" and time_left() > 5:
+        if document_candidates and depth != "quick" and time_left() > 5:
             doc_concurrency = 2 if depth == "normal" else 4
-            max_docs = max(effective_max_results // 2, 2)
-            doc_batch = document_urls[:max_docs]
+            doc_batch = document_candidates
             remaining_for_docs = time_left() - 2
             sem = asyncio.Semaphore(doc_concurrency)
 
-            async def bounded_fetch(url: str):
+            async def bounded_fetch(candidate: dict):
                 async with sem:
                     return await self._fetch_document(
-                        url,
+                        candidate["url"],
                         query=query,
                         timeout_s=min(
                             remaining_for_docs, self.valves.DOCUMENT_FETCH_TIMEOUT
@@ -960,7 +1681,7 @@ class Tools:
                         __event_emitter__=__event_emitter__,
                     )
 
-            doc_tasks = [bounded_fetch(url) for url in doc_batch]
+            doc_tasks = [bounded_fetch(candidate) for candidate in doc_batch]
             try:
                 doc_results = await asyncio.wait_for(
                     asyncio.gather(*doc_tasks, return_exceptions=True),
@@ -974,7 +1695,12 @@ class Tools:
                     "Document conversion timed out, continuing with HTML results"
                 )
 
-        return crawl_results
+        return await self._finalize_crawl_results(
+            crawl_results,
+            query=query,
+            candidates_by_url=candidates_by_url,
+            return_limit=effective_return_limit,
+        )
 
     async def _fetch_document(
         self,
@@ -1032,7 +1758,8 @@ class Tools:
                 "key_points": compact["key_points"],
                 "content_length": len(content),
                 "images": [],
-                "source_type": "document",
+                "content_type": "document",
+                "_content": content,
             }
         except Exception as exc:
             logger.warning(f"Document conversion failed for {url}: {exc}")
@@ -1081,7 +1808,7 @@ class Tools:
                     processed_urls.add(item_url)
                 if item.get("success") is not True:
                     if item_url:
-                        status = item.get("status_code", 0)
+                        status = int(item.get("status_code") or 0)
                         err_type = (
                             "404"
                             if status == 404
@@ -1117,6 +1844,8 @@ class Tools:
                         "key_points": compact["key_points"],
                         "content_length": len(page_content),
                         "images": [],
+                        "content_type": "html",
+                        "_content": page_content,
                     }
                 )
 

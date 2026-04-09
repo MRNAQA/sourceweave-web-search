@@ -28,6 +28,7 @@ def build_mcp_server(tool: Tools | None = None) -> FastMCP:
         name="search_and_crawl",
         description=(
             "Search the web for relevant sources and crawl the selected pages. "
+            "Use concise retrieval-style queries, quote exact errors, and add site: filters when domain preference matters. "
             "Returns compact summaries plus page_ids. Use read_page next when you need full content."
         ),
     )
