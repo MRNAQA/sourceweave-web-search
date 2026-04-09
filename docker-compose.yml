@@ -19,6 +19,9 @@ services:
       UV_CACHE_DIR: /tmp/uv-cache
       FASTMCP_HOST: "0.0.0.0"
       FASTMCP_PORT: "8000"
+      SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL: "http://searxng:8080/search?format=json&q=<query>"
+      SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL: "http://crawl4ai:11235"
+      SOURCEWEAVE_SEARCH_CACHE_REDIS_URL: "redis://redis:6379/2"
     depends_on:
       redis:
         condition: service_healthy
