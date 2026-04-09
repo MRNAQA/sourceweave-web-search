@@ -11,3 +11,4 @@ wheels/
 __pycache__/
 *.pyc
 artifacts/
+.pytest_cache/
