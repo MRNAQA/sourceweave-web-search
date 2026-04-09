@@ -23,8 +23,8 @@ import json
 import re
 import time
 import traceback
-from typing import Any, Callable, List, Literal, Optional, Union
-from urllib.parse import parse_qs, quote, urlparse
+from typing import Any, Awaitable, Callable, List, Literal, Optional, Union
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 from crawl4ai import (
@@ -61,6 +61,8 @@ _TTL_RULES = [
     ("reuters.", 600),
 ]
 _DEFAULT_PAGE_TTL = 1800
+
+EventEmitter = Optional[Callable[[dict[str, Any]], Awaitable[Any]]]
 
 
 def _ttl_for_url(url: str) -> int:
@@ -102,7 +104,9 @@ class _CacheClient:
                     socket_connect_timeout=0.5,
                     decode_responses=True,
                 )
-                await self._redis.ping()
+                ping_result = self._redis.ping()
+                if not isinstance(ping_result, bool):
+                    await ping_result
             except Exception as exc:
                 logger.warning(f"Cache unavailable: {exc}")
                 self._unavailable_until = time.monotonic() + 30
@@ -220,12 +224,12 @@ class Tools:
         DEBUG: bool = Field(default=False)
 
     class UserValves(BaseModel):
-        SEARXNG_MAX_RESULTS: int = Field(default=None)
-        CRAWL4AI_MAX_URLS: int = Field(default=None)
-        CRAWL4AI_DISPLAY_IMAGES: bool = Field(default=None)
-        CRAWL4AI_MAX_IMAGES: int = Field(default=None)
-        CRAWL4AI_DISPLAY_THUMBNAILS: bool = Field(default=None)
-        CRAWL4AI_THUMBNAIL_SIZE: int = Field(default=None)
+        SEARXNG_MAX_RESULTS: Optional[int] = Field(default=None)
+        CRAWL4AI_MAX_URLS: Optional[int] = Field(default=None)
+        CRAWL4AI_DISPLAY_IMAGES: Optional[bool] = Field(default=None)
+        CRAWL4AI_MAX_IMAGES: Optional[int] = Field(default=None)
+        CRAWL4AI_DISPLAY_THUMBNAILS: Optional[bool] = Field(default=None)
+        CRAWL4AI_THUMBNAIL_SIZE: Optional[int] = Field(default=None)
 
     def __init__(self):
         self.valves = self.Valves()
@@ -431,7 +435,7 @@ class Tools:
         return [url for url, is_valid in zip(urls, results) if is_valid]
 
     async def _search_searxng(
-        self, query: str, __event_emitter__: Callable[[dict], Any] = None
+        self, query: str, __event_emitter__: EventEmitter = None
     ) -> List[str]:
         if not self.valves.SEARCH_WITH_SEARXNG and self.valves.DEBUG:
             logger.info("SearXNG search is disabled.")
@@ -613,7 +617,7 @@ class Tools:
         page_id: str,
         focus: str = "",
         max_chars: int = 8000,
-        __event_emitter__: Callable[[dict], Any] = None,
+        __event_emitter__: EventEmitter = None,
     ) -> dict:
         record = self._page_store.get(page_id)
         if not record:
@@ -673,7 +677,7 @@ class Tools:
         depth: str = "normal",
         max_results: Optional[int] = None,
         fresh: bool = False,
-        __event_emitter__: Callable[[dict], Any] = None,
+        __event_emitter__: EventEmitter = None,
         __user__: Optional[dict] = None,
     ) -> Union[list, str]:
         logger.info(f"Starting search and crawl for '{query}' (depth={depth})")
@@ -865,9 +869,13 @@ class Tools:
         url: str,
         query: str = "",
         timeout_s: Optional[float] = None,
-        __event_emitter__: Callable[[dict], Any] = None,
+        __event_emitter__: EventEmitter = None,
     ) -> Optional[dict]:
         if not self.valves.ENABLE_DOCUMENT_CONVERSION or not MARKITDOWN_AVAILABLE:
+            return None
+
+        converter = _MD_CONVERTER
+        if converter is None:
             return None
 
         max_size = self.valves.MAX_DOCUMENT_SIZE_MB * 1024 * 1024
@@ -895,7 +903,7 @@ class Tools:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                lambda: _MD_CONVERTER.convert_stream(io.BytesIO(raw_bytes), url=url),
+                lambda: converter.convert_stream(io.BytesIO(raw_bytes), url=url),
             )
             title = getattr(result, "title", None) or url.rsplit("/", 1)[-1]
             content = getattr(result, "text_content", None) or ""
@@ -923,7 +931,7 @@ class Tools:
         urls: Union[list, str],
         query: Optional[str] = None,
         timeout_s: Optional[float] = None,
-        __event_emitter__: Callable[[dict], Any] = None,
+        __event_emitter__: EventEmitter = None,
     ) -> dict:
         if isinstance(urls, str):
             urls = [urls]
