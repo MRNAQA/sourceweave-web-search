@@ -53,6 +53,9 @@ _TTL_RULES = [
     ("reuters.", 600),
 ]
 _DEFAULT_PAGE_TTL = 1800
+_SEARXNG_HOST_FALLBACK = "http://127.0.0.1:19080/search?format=json&q=<query>"
+_CRAWL4AI_HOST_FALLBACK = "http://127.0.0.1:19235"
+_REDIS_HOST_FALLBACK = "redis://127.0.0.1:16379/2"
 
 _QUERY_STOPWORDS = {
     "a",
@@ -196,23 +199,35 @@ class _CacheClient:
         if not self.enabled or time.monotonic() < self._unavailable_until:
             return None
         if self._redis is None:
+            last_exc = None
             try:
                 import redis.asyncio as aioredis
-
-                self._redis = aioredis.from_url(
-                    self.url,
-                    socket_timeout=0.5,
-                    socket_connect_timeout=0.5,
-                    decode_responses=True,
-                )
-                ping_result = self._redis.ping()
-                if not isinstance(ping_result, bool):
-                    await ping_result
             except Exception as exc:
                 logger.warning(f"Cache unavailable: {exc}")
                 self._unavailable_until = time.monotonic() + 30
                 self._redis = None
                 return None
+
+            for candidate_url in Tools._redis_url_variants(self.url):
+                try:
+                    self._redis = aioredis.from_url(
+                        candidate_url,
+                        socket_timeout=0.5,
+                        socket_connect_timeout=0.5,
+                        decode_responses=True,
+                    )
+                    ping_result = self._redis.ping()
+                    if not isinstance(ping_result, bool):
+                        await ping_result
+                    self.url = candidate_url
+                    return self._redis
+                except Exception as exc:
+                    last_exc = exc
+                    self._redis = None
+
+            logger.warning(f"Cache unavailable: {last_exc}")
+            self._unavailable_until = time.monotonic() + 30
+            return None
         return self._redis
 
     async def get(self, key: str) -> Optional[str]:
@@ -285,13 +300,13 @@ class Tools:
         INITIAL_RESPONSE: str = Field(default="")
         SEARCH_WITH_SEARXNG: bool = Field(default=True)
         SEARXNG_BASE_URL: str = Field(
-            default="http://127.0.0.1:19080/search?format=json&q=<query>"
+            default=_SEARXNG_HOST_FALLBACK
         )
         SEARXNG_API_TOKEN: str = Field(default="")
         SEARXNG_METHOD: Literal["GET", "POST"] = Field(default="GET")
         SEARXNG_TIMEOUT: int = Field(default=30)
         SEARXNG_MAX_RESULTS: int = Field(default=10)
-        CRAWL4AI_BASE_URL: str = Field(default="http://127.0.0.1:19235")
+        CRAWL4AI_BASE_URL: str = Field(default=_CRAWL4AI_HOST_FALLBACK)
         CRAWL4AI_USER_AGENT: str = Field(
             default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.1.2.3 Safari/537.36"
         )
@@ -314,7 +329,7 @@ class Tools:
         DOCUMENT_FETCH_TIMEOUT: int = Field(default=20)
         DEADLINE_SECONDS: int = Field(default=60)
         CACHE_ENABLED: bool = Field(default=True)
-        CACHE_REDIS_URL: str = Field(default="redis://127.0.0.1:16379/2")
+        CACHE_REDIS_URL: str = Field(default=_REDIS_HOST_FALLBACK)
         MORE_STATUS: bool = Field(default=False)
         DEBUG: bool = Field(default=False)
 
@@ -345,6 +360,7 @@ class Tools:
                 "search_candidates": 12,
                 "crawl_limit": 4,
                 "return_limit": 4,
+                "crawl_slack": 1,
                 "search_timeout": 5,
                 "deadline_s": 15,
             },
@@ -352,6 +368,7 @@ class Tools:
                 "search_candidates": 24,
                 "crawl_limit": 10,
                 "return_limit": 6,
+                "crawl_slack": 3,
                 "search_timeout": 6,
                 "deadline_s": 30,
             },
@@ -359,6 +376,7 @@ class Tools:
                 "search_candidates": 50,
                 "crawl_limit": 16,
                 "return_limit": 10,
+                "crawl_slack": 4,
                 "search_timeout": 8,
                 "deadline_s": 55,
             },
@@ -623,6 +641,34 @@ class Tools:
             intents.add("error")
         return intents
 
+    def _focused_query_terms(self, query: str) -> list[str]:
+        query_terms = self._query_terms(query)
+        if not query_terms:
+            return []
+
+        priority_terms = [
+            term
+            for term in (
+                "api",
+                "docs",
+                "documentation",
+                "reference",
+                "historical",
+                "history",
+                "archive",
+                "free",
+                "public",
+                "open",
+                "openapi",
+                "json",
+                "sdk",
+                "error",
+                "exception",
+            )
+            if term in query_terms
+        ]
+        return list(dict.fromkeys(priority_terms + query_terms))
+
     def _generate_query_variants(self, query: str) -> list[str]:
         normalized = self._normalize_query(query)
         if not normalized:
@@ -639,17 +685,46 @@ class Tools:
             variants.append(reduced_variant)
 
         intents = self._detect_query_intents(normalized)
-        if "site:" not in normalized.lower() and (
-            "reddit" in intents
-            or "free" in intents
-            or "no_key" in intents
-            or "historical" in intents
-        ):
+        if "site:" not in normalized.lower() and "reddit" in intents:
             site_variant = f"site:reddit.com {reduced_variant or normalized}"
             if site_variant.lower() not in {variant.lower() for variant in variants}:
                 variants.append(site_variant)
 
+        focused_variant = " ".join(self._focused_query_terms(normalized))
+        if focused_variant and focused_variant.lower() not in {
+            variant.lower() for variant in variants
+        }:
+            variants.append(focused_variant)
+
         return variants[:3]
+
+    @staticmethod
+    def _http_url_variants(url: str) -> list[str]:
+        variants = [url]
+        parsed = urlparse(url)
+        if parsed.netloc.lower() == "searxng:8080":
+            fallback_url = _SEARXNG_HOST_FALLBACK
+        elif parsed.netloc.lower() == "crawl4ai:11235":
+            fallback_url = _CRAWL4AI_HOST_FALLBACK
+        else:
+            fallback_url = ""
+
+        if fallback_url:
+            if parsed.netloc.lower() == "searxng:8080":
+                fallback_url = url.replace(parsed.netloc, urlparse(fallback_url).netloc, 1)
+            else:
+                fallback_url = url.replace(parsed.netloc, urlparse(fallback_url).netloc, 1)
+            if fallback_url not in variants:
+                variants.append(fallback_url)
+
+        return variants
+
+    @staticmethod
+    def _redis_url_variants(url: str) -> list[str]:
+        variants = [url]
+        if url == "redis://redis:6379/2":
+            variants.append(_REDIS_HOST_FALLBACK)
+        return variants
 
     def _build_candidate(
         self,
@@ -1174,7 +1249,6 @@ class Tools:
             return []
 
         normalized_query = self._normalize_query(query)
-        url = self.valves.SEARXNG_BASE_URL.replace("<query>", quote_plus(normalized_query))
         headers = {
             "Accept": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -1182,52 +1256,58 @@ class Tools:
         if self.valves.SEARXNG_API_TOKEN:
             headers["Authorization"] = f"Bearer {self.valves.SEARXNG_API_TOKEN}"
 
-        try:
-            timeout = aiohttp.ClientTimeout(total=self.valves.SEARXNG_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                if self.valves.SEARXNG_METHOD == "POST":
-                    async with session.post(
-                        url, data={"q": query, "format": "json"}, headers=headers
-                    ) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-                else:
-                    async with session.get(url, headers=headers) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-            results = data.get("results", [])
-            max_results = (
-                self.user_valves.SEARXNG_MAX_RESULTS or self.valves.SEARXNG_MAX_RESULTS
-            )
-            structured_results = []
-            for rank, result in enumerate(results[:max_results], start=1):
-                if not result.get("url"):
-                    continue
-                engines = result.get("engines") or []
-                if isinstance(engines, list):
-                    engine = ", ".join(engine for engine in engines if engine)
-                else:
-                    engine = str(engines or "")
-                structured_results.append(
-                    self._build_candidate(
-                        result["url"],
-                        title=str(result.get("title", "") or ""),
-                        snippet=str(
-                            result.get("content")
-                            or result.get("snippet")
-                            or result.get("description")
-                            or ""
-                        ),
-                        search_rank=rank,
-                        engine=result.get("engine") or engine or None,
-                        source_type="search_result",
-                        retrieved_by_queries=[normalized_query],
-                    )
+        last_exc = None
+        for base_url in self._http_url_variants(self.valves.SEARXNG_BASE_URL):
+            url = base_url.replace("<query>", quote_plus(normalized_query))
+            try:
+                timeout = aiohttp.ClientTimeout(total=self.valves.SEARXNG_TIMEOUT)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    if self.valves.SEARXNG_METHOD == "POST":
+                        async with session.post(
+                            url, data={"q": query, "format": "json"}, headers=headers
+                        ) as resp:
+                            resp.raise_for_status()
+                            data = await resp.json()
+                    else:
+                        async with session.get(url, headers=headers) as resp:
+                            resp.raise_for_status()
+                            data = await resp.json()
+                results = data.get("results", [])
+                max_results = (
+                    self.user_valves.SEARXNG_MAX_RESULTS
+                    or self.valves.SEARXNG_MAX_RESULTS
                 )
-            return structured_results
-        except Exception as exc:
-            logger.error(f"Error searching SearXNG: {exc}")
-            return []
+                structured_results = []
+                for rank, result in enumerate(results[:max_results], start=1):
+                    if not result.get("url"):
+                        continue
+                    engines = result.get("engines") or []
+                    if isinstance(engines, list):
+                        engine = ", ".join(engine for engine in engines if engine)
+                    else:
+                        engine = str(engines or "")
+                    structured_results.append(
+                        self._build_candidate(
+                            result["url"],
+                            title=str(result.get("title", "") or ""),
+                            snippet=str(
+                                result.get("content")
+                                or result.get("snippet")
+                                or result.get("description")
+                                or ""
+                            ),
+                            search_rank=rank,
+                            engine=result.get("engine") or engine or None,
+                            source_type="search_result",
+                            retrieved_by_queries=[normalized_query],
+                        )
+                    )
+                return structured_results
+            except Exception as exc:
+                last_exc = exc
+
+        logger.error(f"Error searching SearXNG: {last_exc}")
+        return []
 
     @staticmethod
     def _canonicalize_url(url: str) -> str:
@@ -1516,8 +1596,11 @@ class Tools:
         def time_left():
             return max(0.0, deadline - time.monotonic())
 
-        effective_return_limit = min(
-            max_results or budget["return_limit"], budget["return_limit"]
+        requested_results = max_results if max_results and max_results > 0 else None
+        effective_return_limit = (
+            min(requested_results, budget["search_candidates"])
+            if requested_results is not None
+            else budget["return_limit"]
         )
         query = self._normalize_query(query)
         self.crawl_counter = 0
@@ -1585,8 +1668,13 @@ class Tools:
         if not ranked_candidates:
             return f"No URLs found to crawl for the query: {query}."
 
-        crawl_limit = max(
-            budget["crawl_limit"], effective_return_limit, len(urls or [])
+        crawl_limit = min(
+            budget["search_candidates"],
+            max(
+                budget["crawl_limit"],
+                effective_return_limit + budget["crawl_slack"],
+                len(urls or []),
+            ),
         )
         crawl_results = []
         candidates_by_url = {}
@@ -1779,85 +1867,95 @@ class Tools:
             if not url.startswith("http"):
                 urls[idx] = f"https://{url}"
 
-        endpoint = f"{self.valves.CRAWL4AI_BASE_URL}/crawl"
         payload = {
             "urls": urls,
             "browser_config": _browser_config_payload(),
             "crawler_config": _crawler_config_payload(self),
         }
 
-        try:
-            effective_timeout = timeout_s or (
-                self.valves.CRAWL4AI_TIMEOUT * len(urls) + 60
-            )
-            crawl_timeout = aiohttp.ClientTimeout(total=effective_timeout)
-            async with aiohttp.ClientSession(timeout=crawl_timeout) as session:
-                async with session.post(
-                    endpoint, json=payload, headers={"Content-Type": "application/json"}
-                ) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
+        last_exc = None
+        last_traceback = ""
+        for base_url in self._http_url_variants(self.valves.CRAWL4AI_BASE_URL):
+            endpoint = f"{base_url}/crawl"
+            try:
+                effective_timeout = timeout_s or (
+                    self.valves.CRAWL4AI_TIMEOUT * len(urls) + 60
+                )
+                crawl_timeout = aiohttp.ClientTimeout(total=effective_timeout)
+                async with aiohttp.ClientSession(timeout=crawl_timeout) as session:
+                    async with session.post(
+                        endpoint,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
 
-            results = []
-            sent_urls = set(urls)
-            processed_urls = set()
-            data_list = data.get("results", [])
-            for item in data_list:
-                item_url = item.get("url", "")
-                if item_url:
-                    processed_urls.add(item_url)
-                if item.get("success") is not True:
+                results = []
+                sent_urls = set(urls)
+                processed_urls = set()
+                data_list = data.get("results", [])
+                for item in data_list:
+                    item_url = item.get("url", "")
                     if item_url:
-                        status = int(item.get("status_code") or 0)
-                        err_type = (
-                            "404"
-                            if status == 404
-                            else "403"
-                            if status == 403
-                            else "500"
-                            if status >= 500
-                            else "timeout"
-                        )
-                        await self._cache.setex(
-                            self._dead_cache_key(item_url),
-                            _negative_ttl(err_type),
-                            json.dumps({"reason": err_type, "status": status}),
-                        )
-                    continue
+                        processed_urls.add(item_url)
+                    if item.get("success") is not True:
+                        if item_url:
+                            status = int(item.get("status_code") or 0)
+                            err_type = (
+                                "404"
+                                if status == 404
+                                else "403"
+                                if status == 403
+                                else "500"
+                                if status >= 500
+                                else "timeout"
+                            )
+                            await self._cache.setex(
+                                self._dead_cache_key(item_url),
+                                _negative_ttl(err_type),
+                                json.dumps({"reason": err_type, "status": status}),
+                            )
+                        continue
 
-                markdown_data = item.get("markdown", "")
-                if isinstance(markdown_data, dict):
-                    page_content = markdown_data.get(
-                        "fit_markdown", ""
-                    ) or markdown_data.get("raw_markdown", "")
-                else:
-                    page_content = str(markdown_data)
-                title = item.get("metadata", {}).get("title", "")
-                page_id = await self._store_page_record(item_url, title, page_content)
-                compact = self._build_compact_summary(page_content, query or "")
-                results.append(
-                    {
-                        "url": item_url,
-                        "title": title,
-                        "page_id": page_id,
-                        "summary": compact["summary"],
-                        "key_points": compact["key_points"],
-                        "content_length": len(page_content),
-                        "images": [],
-                        "content_type": "html",
-                        "_content": page_content,
-                    }
-                )
+                    markdown_data = item.get("markdown", "")
+                    if isinstance(markdown_data, dict):
+                        page_content = markdown_data.get(
+                            "fit_markdown", ""
+                        ) or markdown_data.get("raw_markdown", "")
+                    else:
+                        page_content = str(markdown_data)
+                    title = item.get("metadata", {}).get("title", "")
+                    page_id = await self._store_page_record(
+                        item_url, title, page_content
+                    )
+                    compact = self._build_compact_summary(page_content, query or "")
+                    results.append(
+                        {
+                            "url": item_url,
+                            "title": title,
+                            "page_id": page_id,
+                            "summary": compact["summary"],
+                            "key_points": compact["key_points"],
+                            "content_length": len(page_content),
+                            "images": [],
+                            "content_type": "html",
+                            "_content": page_content,
+                        }
+                    )
 
-            for failed_url in sent_urls - processed_urls:
-                await self._cache.setex(
-                    self._dead_cache_key(failed_url),
-                    _negative_ttl("timeout"),
-                    json.dumps({"reason": "no_result"}),
+                for failed_url in sent_urls - processed_urls:
+                    await self._cache.setex(
+                        self._dead_cache_key(failed_url),
+                        _negative_ttl("timeout"),
+                        json.dumps({"reason": "no_result"}),
                 )
-            return {"content": results, "images": []}
-        except Exception as exc:
-            logger.error(
-                f"An unexpected error occurred: {exc}\n{traceback.format_exc()}"
-            )
-            return {"error": str(exc), "details": str(exc)}
+                return {"content": results, "images": []}
+            except Exception as exc:
+                last_exc = exc
+                last_traceback = traceback.format_exc()
+
+        logger.error(
+            f"An unexpected error occurred: {last_exc}\n{last_traceback}"
+        )
+        return {"error": str(last_exc), "details": str(last_exc)}

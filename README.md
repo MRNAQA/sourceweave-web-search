@@ -96,7 +96,7 @@ For host-side use, prefer explicit runtime overrides instead of changing code:
 ```bash
 SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://localhost:19080/search?format=json&q=<query>" \
 SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://localhost:19235" \
-SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://localhost:6379/2" \
+SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://localhost:16379/2" \
 uvx --from . sourceweave-search --query "python programming" --read-first-pages 2
 ```
 
@@ -126,18 +126,23 @@ docker compose run --rm mcp uv run python tests/test_phase4.py
 
 ## Defaults
 
-The standalone OpenWebUI artifact keeps deployment-style container defaults so you do not need to change valves before deployment:
+The canonical tool and generated OpenWebUI artifact default to the published host ports:
+
+- SearXNG: `http://127.0.0.1:19080/search?format=json&q=<query>`
+- Crawl4AI: `http://127.0.0.1:19235`
+- Redis: `redis://127.0.0.1:16379/2`
+
+The Docker Compose `mcp` service overrides those values to the internal container names:
 
 - SearXNG: `http://searxng:8080/search?format=json&q=<query>`
 - Crawl4AI: `http://crawl4ai:11235`
 - Redis: `redis://redis:6379/2`
 
-The compose file keeps those same service names on the internal Docker network. Host ports are exposed only for optional manual debugging.
-
 Default host ports used by this repo:
 
 - SearXNG: `19080`
 - Crawl4AI: `19235`
+- Redis: `16379`
 - MCP: `18000` at `/mcp`
 
 ## Notes

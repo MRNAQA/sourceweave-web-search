@@ -175,6 +175,21 @@ def test_generate_query_variants_adds_retrieval_expansion():
     assert variants[0] == "How do I find a free gold price api with no key and historical data"
     assert len(variants) >= 2, variants
     assert "how" not in variants[1].lower(), variants
+    assert any(
+        variant.startswith("api historical free")
+        or variant.startswith("api historical free gold")
+        for variant in variants[1:]
+    ), variants
+    assert not any("site:reddit.com" in variant for variant in variants), variants
+
+
+def test_generate_query_variants_adds_reddit_only_when_requested():
+    tool = Tools()
+
+    variants = tool._generate_query_variants(
+        "reddit discussion about a free gold price api with no key"
+    )
+
     assert any("site:reddit.com" in variant for variant in variants), variants
 
 
@@ -224,17 +239,6 @@ def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
 
         async def fake_search(query_variant, __event_emitter__=None):
             seen_queries.append(query_variant)
-            if "site:reddit.com" in query_variant:
-                return [
-                    tool._build_candidate(
-                        "https://www.reddit.com/r/algotrading/comments/free_gold_api/",
-                        title="Free gold price API without API key?",
-                        snippet="Community thread comparing historical endpoints and no-key options.",
-                        search_rank=1,
-                        retrieved_by_queries=[query_variant],
-                    )
-                ]
-
             results = [
                 tool._build_candidate(
                     "https://broker.example/",
@@ -273,7 +277,15 @@ def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
                 ),
             ]
             if "free gold price api no key historical data" != query_variant:
-                results = results[1:]
+                results = results[1:] + [
+                    tool._build_candidate(
+                        "https://docs.gold.example/api/quickstart",
+                        title="Gold API quickstart and historical guide",
+                        snippet="Quickstart for free historical gold API requests with JSON examples.",
+                        search_rank=2,
+                        retrieved_by_queries=[query_variant],
+                    )
+                ]
             return results
 
         async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
@@ -302,10 +314,9 @@ def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
                     "# Open gold API\n\nA free historical gold dataset with example endpoints and no auth requirement."
                     "\n\nThe repository documents CSV downloads, JSON mirrors, and sample integrations.",
                 ),
-                "https://www.reddit.com/r/algotrading/comments/free_gold_api/": (
-                    "Free gold price API without API key?",
-                    "# Free gold price API without API key?\n\nSeveral users suggest historical gold APIs, public datasets, "
-                    "and docs pages that do not require a key for basic use.",
+                "https://docs.gold.example/api/quickstart": (
+                    "Gold API quickstart and historical guide",
+                    "# Quickstart\n\nFree historical gold API examples, quickstart steps, and endpoint documentation.",
                 ),
             }
             results = []
@@ -341,13 +352,15 @@ def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
         assert isinstance(results, list), results
         assert len(results) == 2, results
         assert len(seen_queries) >= 2, seen_queries
-        assert any("site:reddit.com" in query for query in seen_queries), seen_queries
+        assert not any("site:reddit.com" in query for query in seen_queries), seen_queries
         assert len(crawl_calls) == 4, crawl_calls
         assert "https://broker.example/" not in crawl_calls, crawl_calls
 
         top_urls = [result["url"] for result in results]
         assert "https://docs.gold.example/api/historical" in top_urls, results
-        assert any("reddit.com" in url or "github.example" in url for url in top_urls), results
+        assert any(
+            "github.example" in url or "quickstart" in url for url in top_urls
+        ), results
 
         for result in results:
             for key in (
@@ -361,6 +374,64 @@ def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
             ):
                 assert key in result, result
             assert result["post_crawl_score"] >= result["pre_crawl_score"] * 0.2, result
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_honors_requested_max_results_above_default(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    f"https://docs{idx}.example/api/{idx}",
+                    title=f"Historical gold API page {idx}",
+                    snippet="Free historical gold API docs and examples without an API key.",
+                    search_rank=idx,
+                    retrieved_by_queries=[query_variant],
+                )
+                for idx in range(1, 13)
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            results = []
+            for url in urls:
+                idx = int(url.rsplit("/", 1)[-1])
+                content = (
+                    f"# Historical gold API page {idx}\n\n"
+                    "Free historical gold API docs, JSON examples, and endpoint notes without an API key."
+                )
+                page_id = tool._page_store.put(url, f"Historical gold API page {idx}", content)
+                compact = tool._build_compact_summary(content, query or "")
+                results.append(
+                    {
+                        "url": url,
+                        "title": f"Historical gold API page {idx}",
+                        "page_id": page_id,
+                        "summary": compact["summary"],
+                        "key_points": compact["key_points"],
+                        "content_length": len(content),
+                        "images": [],
+                        "content_type": "html",
+                        "_content": content,
+                    }
+                )
+            return {"content": results, "images": []}
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query="free gold price api no key historical data",
+            depth="normal",
+            max_results=8,
+            fresh=True,
+        )
+
+        assert isinstance(results, list), results
+        assert len(results) == 8, results
 
     asyncio.run(scenario())
 

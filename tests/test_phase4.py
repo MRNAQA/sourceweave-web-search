@@ -15,7 +15,22 @@ from crawl4ai import (
 from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 
 
-CRAWL4AI_URL = os.getenv("CRAWL4AI_URL", "http://127.0.0.1:19235")
+def _crawl4ai_url() -> str:
+    explicit = os.getenv("CRAWL4AI_URL")
+    if explicit:
+        return explicit
+
+    candidates = ["http://crawl4ai:11235", "http://127.0.0.1:19235"]
+    for candidate in candidates:
+        try:
+            requests.get(f"{candidate}/health", timeout=3)
+            return candidate
+        except Exception:
+            continue
+    return candidates[0]
+
+
+CRAWL4AI_URL = _crawl4ai_url()
 
 
 def build_payload(url, query=None, bm25_threshold=1.0):
