@@ -44,6 +44,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-chars", type=int, default=1200)
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument(
+        "--include-metadata",
+        action="store_true",
+        help="Include per-query debug metadata in CLI output.",
+    )
+    parser.add_argument(
         "--searxng-base-url",
         default=None,
         help="Optional override for SEARXNG_BASE_URL. The SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL env var works too.",
@@ -109,6 +114,8 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
             fresh=args.fresh,
         )
         payload["search_and_crawl"] = results
+        if args.include_metadata:
+            payload["search_metadata"] = tool.last_query_metadata
 
         read_first_count = max(args.read_first_pages, 1 if args.read_first_page else 0)
         page_ids = _page_ids_from_results(results, read_first_count)

@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sourceweave_web_search.config import RuntimeOverrides, build_tools
-from sourceweave_web_search.tool import Tools
+from sourceweave_web_search.tool import Tools, _negative_ttl
 
 
 def _repo_root() -> Path:
@@ -396,6 +396,234 @@ def test_search_and_crawl_returns_empty_list_when_no_candidates(monkeypatch):
         )
 
         assert results == [], results
+
+    asyncio.run(scenario())
+
+
+def test_batch_crawl_failure_retries_urls_individually(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+        urls = [
+            "https://docs.example.com/react/use-effect",
+            "https://docs.example.com/react/use-layout-effect",
+        ]
+        crawl_calls = []
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    url,
+                    title=f"Doc for {idx}",
+                    snippet="Official React documentation example.",
+                    search_rank=idx,
+                    retrieved_by_queries=[query_variant],
+                )
+                for idx, url in enumerate(urls, start=1)
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            crawl_calls.append(list(urls))
+            if len(urls) > 1:
+                return {"error": "batch timeout", "details": "timeout"}
+
+            url = urls[0]
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        "React Effect Docs",
+                        "# React Effect Docs\n\nOfficial cleanup documentation example.",
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=2,
+            fresh=True,
+        )
+
+        assert len(results) == 2, results
+        assert crawl_calls[0] == urls, crawl_calls
+        assert crawl_calls[1:] == [[urls[0]], [urls[1]]], crawl_calls
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_falls_back_to_search_snippets_when_crawl_returns_nothing(
+    monkeypatch,
+):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+        search_url = "https://react.dev/reference/react/useEffect"
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="useEffect - React",
+                    snippet="Official React documentation covering useEffect cleanup behavior.",
+                    search_rank=1,
+                    retrieved_by_queries=[query_variant],
+                )
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            return {"content": [], "images": []}
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+
+        assert len(results) == 1, results
+        assert results[0]["url"] == search_url, results
+        assert results[0]["fallback_reason"] == "search_only", results[0]
+        assert results[0]["content_type"] == "search_result", results[0]
+        assert results[0]["search_snippet"], results[0]
+
+    asyncio.run(scenario())
+
+
+def test_transient_failure_negative_ttls_are_shorter():
+    assert _negative_ttl("timeout") == 45
+    assert _negative_ttl("500") == 90
+    assert _negative_ttl("403") == 180
+    assert _negative_ttl("blocked") == 300
+    assert _negative_ttl("404") == 1800
+
+
+def test_search_and_crawl_records_query_failure_metadata(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+        first_url = "https://react.dev/reference/react/useEffect"
+        second_url = "https://blog.example.com/react-cleanup"
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    first_url,
+                    title="useEffect - React",
+                    snippet="Official React documentation covering useEffect cleanup behavior.",
+                    search_rank=1,
+                    retrieved_by_queries=[query_variant],
+                ),
+                tool._build_candidate(
+                    second_url,
+                    title="React cleanup article",
+                    snippet="Third-party article about cleanup behavior.",
+                    search_rank=2,
+                    retrieved_by_queries=[query_variant],
+                ),
+            ]
+
+        async def fake_crawl(
+            urls,
+            query=None,
+            timeout_s=None,
+            __event_emitter__=None,
+        ):
+            if len(urls) > 1:
+                return {"error": "batch timeout", "details": "timeout"}
+            if urls[0] == second_url:
+                if tool._active_query_metadata is not None:
+                    tool._record_failed_url(
+                        tool._active_query_metadata,
+                        second_url,
+                        "timeout",
+                        stage="crawl_single_retry",
+                        recovered_by_single_retry=False,
+                    )
+                return {"error": "timeout", "details": "timeout"}
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        first_url,
+                        "useEffect - React",
+                        "# useEffect\n\nOfficial React documentation covering cleanup behavior.",
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=2,
+            fresh=True,
+        )
+
+        metadata = tool.last_query_metadata
+        assert len(results) == 1, results
+        assert metadata["search"]["candidate_count"] == 2, metadata
+        assert metadata["crawl"]["attempted"] == 2, metadata
+        assert metadata["crawl"]["batch_failures"] == 1, metadata
+        assert metadata["crawl"]["single_retry_attempts"] == 2, metadata
+        assert metadata["crawl"]["single_retry_successes"] == 1, metadata
+        assert metadata["crawl"]["failed"] >= 1, metadata
+        assert metadata["fallbacks_used"] == ["batch_to_single"], metadata
+        assert any(
+            item["url"] == second_url for item in metadata["crawl"]["failed_urls"]
+        ), metadata
+
+    asyncio.run(scenario())
+
+
+def test_cli_can_include_search_metadata(monkeypatch):
+    async def fake_search_and_crawl(*args, **kwargs):
+        return [
+            {
+                "url": "https://example.com/doc",
+                "title": "Example",
+                "page_id": "page123",
+                "summary": "Example summary",
+                "key_points": ["Example summary"],
+            }
+        ]
+
+    class FakeTool:
+        def __init__(self):
+            self.last_query_metadata = {
+                "query": "example query",
+                "crawl": {"failed": 1},
+            }
+
+        async def search_and_crawl(self, *args, **kwargs):
+            return await fake_search_and_crawl(*args, **kwargs)
+
+        async def read_page(self, *args, **kwargs):
+            return None
+
+    async def scenario():
+        from sourceweave_web_search import cli as cli_module
+
+        monkeypatch.setattr(
+            cli_module, "build_tools", lambda valve_overrides=None: FakeTool()
+        )
+        args = cli_module.parse_args(["--query", "example query", "--include-metadata"])
+        payload = await cli_module.run_cli(args)
+        assert payload["search_metadata"]["query"] == "example query", payload
+        assert payload["search_metadata"]["crawl"]["failed"] == 1, payload
 
     asyncio.run(scenario())
 

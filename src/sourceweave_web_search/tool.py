@@ -99,11 +99,11 @@ def _ttl_for_url(url: str) -> int:
 
 def _negative_ttl(error_type: str) -> int:
     ttls = {
-        "timeout": 300,
+        "timeout": 45,
         "404": 1800,
-        "blocked": 3600,
-        "403": 3600,
-        "500": 600,
+        "blocked": 300,
+        "403": 180,
+        "500": 90,
     }
     return ttls.get(error_type, 600)
 
@@ -491,6 +491,12 @@ class Tools:
             "search_misses": 0,
             "negative_skips": 0,
         }
+        self._last_query_metadata: dict[str, Any] = {}
+        self._active_query_metadata: dict[str, Any] | None = None
+
+    @property
+    def last_query_metadata(self) -> dict[str, Any]:
+        return dict(self._last_query_metadata)
 
     def _sync_runtime_state(self) -> None:
         if self.valves.SEARXNG_BASE_URL:
@@ -1293,6 +1299,157 @@ class Tools:
         enriched["_content_match_score"] = content_score
         return enriched
 
+    def _build_search_only_result(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        title = str(candidate.get("title", "") or candidate.get("url", ""))
+        summary = str(candidate.get("snippet", "") or "")
+        page_id = self._page_store.put(candidate["url"], title, summary)
+        return {
+            "url": candidate["url"],
+            "title": title,
+            "page_id": page_id,
+            "summary": summary,
+            "key_points": [summary] if summary else [],
+            "content_length": len(summary),
+            "images": [],
+            "content_type": "search_result",
+            "source_type": candidate.get("source_type", "search_result"),
+            "search_rank": candidate.get("search_rank"),
+            "search_title": title,
+            "search_snippet": summary,
+            "pre_crawl_score": round(float(candidate.get("pre_crawl_score", 0.0)), 4),
+            "rank_fusion_score": round(
+                float(candidate.get("rank_fusion_score", 0.0)), 4
+            ),
+            "engine": candidate.get("engine"),
+            "retrieved_by_queries": list(candidate.get("retrieved_by_queries", [])),
+            "discovered_from": candidate.get("discovered_from"),
+            "explicit_order": candidate.get("explicit_order"),
+            "post_crawl_score": round(float(candidate.get("pre_crawl_score", 0.0)), 4),
+            "fallback_reason": "search_only",
+        }
+
+    def _empty_query_metadata(self, query: str, depth: str) -> dict[str, Any]:
+        return {
+            "query": query,
+            "depth": depth,
+            "search": {
+                "cache_hit": False,
+                "candidate_count": 0,
+                "provider_failures": [],
+            },
+            "crawl": {
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "failed_urls": [],
+                "batch_failures": 0,
+                "single_retry_attempts": 0,
+                "single_retry_successes": 0,
+            },
+            "fallbacks_used": [],
+            "result_count": 0,
+        }
+
+    def _record_failed_url(
+        self,
+        metadata: dict[str, Any],
+        url: str,
+        reason: str,
+        *,
+        stage: str,
+        recovered_by_single_retry: bool = False,
+    ) -> None:
+        metadata["crawl"]["failed_urls"].append(
+            {
+                "url": url,
+                "stage": stage,
+                "reason": reason,
+                "recovered_by_single_retry": recovered_by_single_retry,
+            }
+        )
+
+    def _record_provider_failure(
+        self,
+        metadata: dict[str, Any],
+        provider: str,
+        error: str,
+    ) -> None:
+        metadata["search"]["provider_failures"].append(
+            {"provider": provider, "error": error}
+        )
+
+    async def _crawl_batch_with_fallback(
+        self,
+        batch: list[dict[str, Any]],
+        query: str,
+        timeout_s: float,
+        __event_emitter__: EventEmitter = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        batch_result = await self._crawl_url(
+            urls=[candidate["url"] for candidate in batch],
+            query=query,
+            timeout_s=timeout_s,
+            __event_emitter__=__event_emitter__,
+        )
+        if "error" not in batch_result:
+            return batch_result.get("content", []), False
+
+        if self._active_query_metadata is not None:
+            self._active_query_metadata["crawl"]["batch_failures"] += 1
+        logger.warning(
+            f"Crawl4AI batch request failed; retrying {len(batch)} URLs individually: {batch_result.get('error')}"
+        )
+        recovered_results: list[dict[str, Any]] = []
+        per_url_timeout = max(3.0, timeout_s / max(len(batch), 1))
+        for candidate in batch:
+            if self._active_query_metadata is not None:
+                self._active_query_metadata["crawl"]["single_retry_attempts"] += 1
+            single_result = await self._crawl_url(
+                urls=[candidate["url"]],
+                query=query,
+                timeout_s=per_url_timeout,
+                __event_emitter__=__event_emitter__,
+            )
+            if "error" in single_result:
+                if self._active_query_metadata is not None:
+                    self._record_failed_url(
+                        self._active_query_metadata,
+                        candidate["url"],
+                        str(single_result.get("error") or "crawl_error"),
+                        stage="crawl_single_retry",
+                        recovered_by_single_retry=False,
+                    )
+                logger.warning(
+                    f"Crawl4AI single-url retry failed for {candidate['url']}: {single_result.get('error')}"
+                )
+                continue
+            if self._active_query_metadata is not None:
+                self._active_query_metadata["crawl"]["single_retry_successes"] += 1
+            recovered_results.extend(single_result.get("content", []))
+        return recovered_results, True
+
+    async def _search_only_fallback_results(
+        self,
+        ranked_candidates: list[dict[str, Any]],
+        return_limit: int,
+    ) -> list[dict[str, Any]]:
+        fallback_results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in ranked_candidates:
+            canonical = self._canonicalize_url(candidate["url"])
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            fallback_results.append(self._build_search_only_result(candidate))
+            if len(fallback_results) >= return_limit:
+                break
+
+        if fallback_results and self.valves.DEBUG:
+            logger.info(
+                f"Returning {len(fallback_results)} search-only fallback results after crawl degradation"
+            )
+        return fallback_results
+
     async def _finalize_crawl_results(
         self,
         crawl_results: list[dict],
@@ -1431,6 +1588,10 @@ class Tools:
                             resp.raise_for_status()
                             data = await resp.json()
                 results = data.get("results", [])
+                if self.valves.DEBUG:
+                    logger.info(
+                        f"SearXNG returned {len(results)} raw results for query={normalized_query!r}"
+                    )
                 max_results = (
                     self.user_valves.SEARXNG_MAX_RESULTS
                     or self.valves.SEARXNG_MAX_RESULTS
@@ -1463,6 +1624,14 @@ class Tools:
                 return structured_results
             except Exception as exc:
                 last_exc = exc
+                if self._active_query_metadata is not None:
+                    self._record_provider_failure(
+                        self._active_query_metadata, "searxng", str(exc)
+                    )
+                if self.valves.DEBUG:
+                    logger.warning(
+                        f"SearXNG request failed for query={normalized_query!r} base_url={base_url!r}: {exc}"
+                    )
 
         logger.error(f"Error searching SearXNG: {last_exc}")
         return []
@@ -1738,6 +1907,9 @@ class Tools:
         __event_emitter__: EventEmitter = None,
     ) -> list[dict[str, Any]]:
         logger.info(f"Starting search and crawl for '{query}' (depth={depth})")
+        query_metadata = self._empty_query_metadata(query, depth)
+        self._last_query_metadata = query_metadata
+        self._active_query_metadata = query_metadata
         self._cache_stats = {
             "page_hits": 0,
             "page_misses": 0,
@@ -1778,6 +1950,7 @@ class Tools:
         search_candidates: list[dict[str, Any]] = []
         if cached_search:
             self._cache_stats["search_hits"] += 1
+            query_metadata["search"]["cache_hit"] = True
             try:
                 search_candidates = self._normalize_cached_search_candidates(
                     json.loads(cached_search), query
@@ -1816,6 +1989,7 @@ class Tools:
                 await self._cache.setex(
                     search_cache_key, 600, json.dumps(search_candidates)
                 )
+        query_metadata["search"]["candidate_count"] = len(search_candidates)
 
         ranked_candidates = self._rank_candidates(
             self._merge_explicit_candidates(query, search_candidates, urls),
@@ -1826,6 +2000,7 @@ class Tools:
         ]
         self.total_urls = len(ranked_candidates)
         if not ranked_candidates:
+            query_metadata["result_count"] = 0
             return []
 
         crawl_limit = min(
@@ -1886,6 +2061,8 @@ class Tools:
             self._cache_stats["page_misses"] += 1
             candidates_to_fetch.append(candidate)
 
+        query_metadata["crawl"]["attempted"] = len(candidates_to_fetch)
+
         html_candidates = []
         document_candidates = []
         for candidate in candidates_to_fetch:
@@ -1900,15 +2077,21 @@ class Tools:
                 break
             batch = html_candidates[i : i + self.valves.CRAWL4AI_BATCH]
             try:
-                crawled_batch = await self._crawl_url(
-                    urls=[candidate["url"] for candidate in batch],
+                crawled_batch, used_fallback = await self._crawl_batch_with_fallback(
+                    batch=batch,
                     query=query,
                     timeout_s=min(
                         remaining - 1, self.valves.CRAWL4AI_TIMEOUT * len(batch)
                     ),
                     __event_emitter__=__event_emitter__,
                 )
-                crawl_results.extend(crawled_batch.get("content", []))
+                crawl_results.extend(crawled_batch)
+                if used_fallback:
+                    query_metadata["fallbacks_used"].append("batch_to_single")
+                if self.valves.DEBUG:
+                    logger.info(
+                        f"Crawl batch size={len(batch)} results={len(crawled_batch)} fallback={used_fallback}"
+                    )
             except Exception as exc:
                 logger.error(f"Batch crawl error: {exc}\n{traceback.format_exc()}")
 
@@ -1943,12 +2126,32 @@ class Tools:
                     "Document conversion timed out, continuing with HTML results"
                 )
 
-        return await self._finalize_crawl_results(
+        finalized_results = await self._finalize_crawl_results(
             crawl_results,
             query=query,
             candidates_by_url=candidates_by_url,
             return_limit=effective_return_limit,
         )
+        query_metadata["crawl"]["succeeded"] = len(crawl_results)
+        query_metadata["crawl"]["failed"] = len(query_metadata["crawl"]["failed_urls"])
+        if finalized_results:
+            query_metadata["result_count"] = len(finalized_results)
+            self._active_query_metadata = None
+            return finalized_results
+
+        if ranked_candidates:
+            query_metadata["fallbacks_used"].append("search_only")
+            fallback_results = await self._search_only_fallback_results(
+                ranked_candidates,
+                effective_return_limit,
+            )
+            query_metadata["result_count"] = len(fallback_results)
+            self._active_query_metadata = None
+            return fallback_results
+
+        query_metadata["result_count"] = 0
+        self._active_query_metadata = None
+        return []
 
     async def _fetch_document(
         self,
@@ -2076,6 +2279,14 @@ class Tools:
                                 _negative_ttl(err_type),
                                 json.dumps({"reason": err_type, "status": status}),
                             )
+                            if self._active_query_metadata is not None:
+                                self._record_failed_url(
+                                    self._active_query_metadata,
+                                    item_url,
+                                    err_type,
+                                    stage="crawl_batch",
+                                    recovered_by_single_retry=False,
+                                )
                         continue
 
                     markdown_data = item.get("markdown", "")
@@ -2110,6 +2321,14 @@ class Tools:
                         _negative_ttl("timeout"),
                         json.dumps({"reason": "no_result"}),
                     )
+                    if self._active_query_metadata is not None:
+                        self._record_failed_url(
+                            self._active_query_metadata,
+                            failed_url,
+                            "no_result",
+                            stage="crawl_batch",
+                            recovered_by_single_retry=False,
+                        )
                 return {"content": results, "images": []}
             except Exception as exc:
                 last_exc = exc
