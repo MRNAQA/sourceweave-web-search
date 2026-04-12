@@ -6,8 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from sourceweave_web_search.config import RuntimeOverrides, build_tools
 from sourceweave_web_search.tool import Tools
 
 
@@ -15,6 +18,25 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _make_crawl_result(
+    tool: Tools, url: str, title: str, content: str, query: str
+) -> dict:
+    page_id = tool._page_store.put(url, title, content)
+    compact = tool._build_compact_summary(content, query)
+    return {
+        "url": url,
+        "title": title,
+        "page_id": page_id,
+        "summary": compact["summary"],
+        "key_points": compact["key_points"],
+        "content_length": len(content),
+        "images": [],
+        "content_type": "html",
+        "_content": content,
+    }
+
+
+@pytest.mark.integration
 def test_search_and_read_round_trip():
     async def scenario():
         tool = Tools()
@@ -39,6 +61,7 @@ def test_search_and_read_round_trip():
     asyncio.run(scenario())
 
 
+@pytest.mark.integration
 def test_read_page_works_from_fresh_tool_instance():
     async def scenario():
         tool = Tools()
@@ -114,12 +137,51 @@ def test_read_page_multi_returns_partial_errors_for_missing_ids():
     asyncio.run(scenario())
 
 
-def test_explicit_url_crawl_without_relying_on_search_ranking():
+def test_explicit_url_crawl_without_relying_on_search_ranking(monkeypatch):
     async def scenario():
         tool = Tools()
+        tool._cache.enabled = False
+        query = "python about page"
+        explicit_url = "https://www.python.org/about/"
+        search_url = "https://www.python.org/downloads/release/python-3114/"
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="Python 3.11.4 release",
+                    snippet="Release notes and downloads for Python 3.11.4.",
+                    search_rank=1,
+                    retrieved_by_queries=[query_variant],
+                )
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            page_bodies = {
+                explicit_url: (
+                    "About Python",
+                    "# About Python\n\nMission statement.",
+                ),
+                search_url: (
+                    "Python 3.11.4 release",
+                    "# Python 3.11.4 release\n\nDetailed release notes, changelog, installers, and download instructions for Python 3.11.4.",
+                ),
+            }
+            return {
+                "content": [
+                    _make_crawl_result(tool, url, *page_bodies[url], query or "")
+                    for url in urls
+                    if url in page_bodies
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
         results = await tool.search_and_crawl(
-            query="python about page",
-            urls=["https://www.python.org/about/"],
+            query=query,
+            urls=[explicit_url],
             depth="quick",
             max_results=1,
             fresh=True,
@@ -127,11 +189,218 @@ def test_explicit_url_crawl_without_relying_on_search_ranking():
 
         assert isinstance(results, list), results
         assert results, "explicit URL crawl returned no results"
-        assert results[0]["url"].startswith("https://www.python.org/about"), results[0]
+        assert results[0]["url"] == explicit_url, results[0]
+        assert results[0]["source_type"] == "explicit_url", results[0]
+        assert results[0]["pre_crawl_score"] >= 100, results[0]
 
     asyncio.run(scenario())
 
 
+def test_multiple_explicit_urls_preserve_input_order(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+        query = "python reference pages"
+        explicit_urls = [
+            "https://docs.python.org/3/tutorial/",
+            "https://docs.python.org/3/library/",
+        ]
+        search_url = "https://docs.python.org/3/whatsnew/3.12.html"
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="What's New In Python 3.12",
+                    snippet="Release highlights and new features for Python 3.12.",
+                    search_rank=1,
+                    retrieved_by_queries=[query_variant],
+                )
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            page_bodies = {
+                explicit_urls[0]: (
+                    "Python Tutorial",
+                    "# Python Tutorial\n\nLearn the Python tutorial from the official docs.",
+                ),
+                explicit_urls[1]: (
+                    "Python Standard Library",
+                    "# Python Standard Library\n\nReference documentation for the standard library.",
+                ),
+                search_url: (
+                    "What's New In Python 3.12",
+                    "# What's New In Python 3.12\n\nFeature highlights and upgrade notes for Python 3.12.",
+                ),
+            }
+            crawl_order = [explicit_urls[1], search_url, explicit_urls[0]]
+            return {
+                "content": [
+                    _make_crawl_result(tool, url, *page_bodies[url], query or "")
+                    for url in crawl_order
+                    if url in urls
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query=query,
+            urls=explicit_urls,
+            depth="quick",
+            max_results=2,
+            fresh=True,
+        )
+
+        assert [result["url"] for result in results] == explicit_urls, results
+        assert all(result["source_type"] == "explicit_url" for result in results), (
+            results
+        )
+
+    asyncio.run(scenario())
+
+
+def test_explicit_url_survives_crawl_candidate_truncation(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+        query = "relevant api docs historical data no key"
+        explicit_url = "https://example.com/user-picked"
+        search_urls = [
+            f"https://docs{idx}.example.com/relevant-api-docs-{idx}"
+            for idx in range(1, 6)
+        ]
+        crawl_calls = []
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    url,
+                    title=f"Relevant API docs {idx}",
+                    snippet="Relevant API docs with endpoints, examples, free access, and historical data.",
+                    search_rank=idx,
+                    retrieved_by_queries=[query_variant],
+                )
+                for idx, url in enumerate(search_urls, start=1)
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            crawl_calls.extend(urls)
+            results = []
+            for url in urls:
+                if url == explicit_url:
+                    title = "User picked"
+                    content = "# Picked\n\nA page with short unrelated text."
+                else:
+                    title = "Relevant API docs"
+                    content = (
+                        "# Relevant API docs\n\n"
+                        "Relevant api docs historical data no api key. " * 30
+                    )
+                results.append(
+                    _make_crawl_result(tool, url, title, content, query or "")
+                )
+            return {"content": results, "images": []}
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query=query,
+            urls=[explicit_url],
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+
+        assert crawl_calls[0] == explicit_url, crawl_calls
+        assert explicit_url in crawl_calls, crawl_calls
+        assert len(crawl_calls) == 4, crawl_calls
+        assert [result["url"] for result in results] == [explicit_url], results
+        assert results[0]["source_type"] == "explicit_url", results[0]
+
+    asyncio.run(scenario())
+
+
+def test_explicit_url_failure_falls_back_to_ranked_search_results(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+        query = "python about page"
+        explicit_url = "https://www.python.org/about/"
+        search_url = "https://www.python.org/community/"
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="Python Community",
+                    snippet="Community resources, events, and Python Software Foundation links.",
+                    search_rank=1,
+                    retrieved_by_queries=[query_variant],
+                )
+            ]
+
+        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        search_url,
+                        "Python Community",
+                        "# Python Community\n\nThe Python community page collects news, events, and ways to get involved.",
+                        query or "",
+                    )
+                ]
+                if search_url in urls
+                else [],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query=query,
+            urls=[explicit_url],
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+
+        assert isinstance(results, list), results
+        assert [result["url"] for result in results] == [search_url], results
+        assert all(result["source_type"] == "search_result" for result in results), (
+            results
+        )
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_returns_empty_list_when_no_candidates(monkeypatch):
+    async def scenario():
+        tool = Tools()
+        tool._cache.enabled = False
+
+        async def fake_search(query_variant, __event_emitter__=None):
+            return []
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+
+        results = await tool.search_and_crawl(
+            query="nothing should be found",
+            depth="quick",
+            fresh=True,
+        )
+
+        assert results == [], results
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
 def test_run_tool_call_batches_read_page_results():
     result = subprocess.run(
         [
@@ -172,7 +441,10 @@ def test_generate_query_variants_adds_retrieval_expansion():
         "How do I find a free gold price api with no key and historical data"
     )
 
-    assert variants[0] == "How do I find a free gold price api with no key and historical data"
+    assert (
+        variants[0]
+        == "How do I find a free gold price api with no key and historical data"
+    )
     assert len(variants) >= 2, variants
     assert "how" not in variants[1].lower(), variants
     assert any(
@@ -352,7 +624,9 @@ def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
         assert isinstance(results, list), results
         assert len(results) == 2, results
         assert len(seen_queries) >= 2, seen_queries
-        assert not any("site:reddit.com" in query for query in seen_queries), seen_queries
+        assert not any("site:reddit.com" in query for query in seen_queries), (
+            seen_queries
+        )
         assert len(crawl_calls) == 4, crawl_calls
         assert "https://broker.example/" not in crawl_calls, crawl_calls
 
@@ -403,7 +677,9 @@ def test_search_and_crawl_honors_requested_max_results_above_default(monkeypatch
                     f"# Historical gold API page {idx}\n\n"
                     "Free historical gold API docs, JSON examples, and endpoint notes without an API key."
                 )
-                page_id = tool._page_store.put(url, f"Historical gold API page {idx}", content)
+                page_id = tool._page_store.put(
+                    url, f"Historical gold API page {idx}", content
+                )
                 compact = tool._build_compact_summary(content, query or "")
                 results.append(
                     {
@@ -483,7 +759,9 @@ def test_crawl_url_handles_missing_status_code(monkeypatch):
         async def fake_setex(key, ttl_s, value):
             negative_cache_keys.append((key, ttl_s, value))
 
-        monkeypatch.setattr("sourceweave_web_search.tool.aiohttp.ClientSession", FakeSession)
+        monkeypatch.setattr(
+            "sourceweave_web_search.tool.aiohttp.ClientSession", FakeSession
+        )
         monkeypatch.setattr(tool._cache, "setex", fake_setex)
 
         result = await tool._crawl_url(["https://bad.example/"], query="gold api")
@@ -492,3 +770,42 @@ def test_crawl_url_handles_missing_status_code(monkeypatch):
         assert negative_cache_keys, negative_cache_keys
 
     asyncio.run(scenario())
+
+
+def test_build_tools_syncs_cache_and_normalizes_searxng_runtime_overrides():
+    tool = build_tools(
+        valve_overrides={
+            "SEARXNG_BASE_URL": "http://search.example/search?lang=en",
+            "CACHE_REDIS_URL": "redis://cache.example:6379/9",
+            "CACHE_ENABLED": False,
+        }
+    )
+
+    assert (
+        tool.valves.SEARXNG_BASE_URL
+        == "http://search.example/search?lang=en&format=json&q=<query>"
+    )
+    assert tool._cache.url == "redis://cache.example:6379/9"
+    assert tool._cache.enabled is False
+    assert tool._cache._redis is None
+    assert tool._cache._unavailable_until == 0.0
+
+
+def test_runtime_overrides_reset_cache_state_and_replace_fixed_searxng_query():
+    tool = Tools()
+    tool._cache._unavailable_until = 99.0
+
+    RuntimeOverrides(
+        valve_overrides={
+            "SEARXNG_BASE_URL": "http://search.example/search?q=stale&lang=en&format=html",
+        }
+    ).apply(tool)
+
+    assert (
+        tool.valves.SEARXNG_BASE_URL
+        == "http://search.example/search?q=<query>&lang=en&format=json"
+    )
+    assert tool._cache.url == tool.valves.CACHE_REDIS_URL
+    assert tool._cache.enabled is tool.valves.CACHE_ENABLED
+    assert tool._cache._redis is None
+    assert tool._cache._unavailable_until == 0.0

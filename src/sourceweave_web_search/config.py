@@ -1,7 +1,6 @@
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping
-from urllib.parse import parse_qs, urlparse
 
 from sourceweave_web_search.tool import Tools
 
@@ -45,36 +44,11 @@ class RuntimeOverrides:
         return cls(valve_overrides=overrides)
 
     def apply(self, tool: Tools) -> Tools:
-        for field_name, value in self.valve_overrides.items():
-            if hasattr(tool.valves, field_name):
-                setattr(tool.valves, field_name, value)
-
-        tool._cache.url = tool.valves.CACHE_REDIS_URL
-        tool._cache.enabled = tool.valves.CACHE_ENABLED
-
-        if tool.valves.SEARCH_WITH_SEARXNG and tool.valves.SEARXNG_BASE_URL:
-            tool.valves.SEARXNG_BASE_URL = _normalize_searxng_base_url(
-                tool.valves.SEARXNG_BASE_URL
-            )
-
-        return tool
+        return tool.apply_valve_overrides(self.valve_overrides)
 
 
-def _normalize_searxng_base_url(base_url: str) -> str:
-    parsed_url = urlparse(base_url)
-    parsed_query = parse_qs(parsed_url.query)
-    if "q" not in parsed_query:
-        parsed_query["q"] = ["<query>"]
-    if "format" in parsed_query and parsed_query["format"][0] != "json":
-        parsed_query["format"][0] = "json"
-
-    reconstructed_query = "&".join(
-        f"{key}={value[0]}" for key, value in parsed_query.items()
-    )
-    return (
-        f"{parsed_url.scheme}://{parsed_url.netloc}"
-        f"{parsed_url.path}?{reconstructed_query}"
-    )
+def _sync_runtime_state(tool: Tools) -> None:
+    tool._sync_runtime_state()
 
 
 def build_tools(
@@ -83,11 +57,12 @@ def build_tools(
     valve_overrides: Mapping[str, Any] | None = None,
 ) -> Tools:
     tool = Tools()
-    (runtime_overrides or RuntimeOverrides.from_env()).apply(tool)
-
+    merged_overrides = dict(
+        (runtime_overrides or RuntimeOverrides.from_env()).valve_overrides
+    )
     for field_name, value in (valve_overrides or {}).items():
         if value is None or not hasattr(tool.valves, field_name):
             continue
-        setattr(tool.valves, field_name, value)
+        merged_overrides[field_name] = value
 
-    return tool
+    return tool.apply_valve_overrides(merged_overrides)

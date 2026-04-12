@@ -1,10 +1,10 @@
 services:
   crawl4ai:
-    image: unclecode/crawl4ai:latest
+    image: "${CRAWL4AI_IMAGE:-unclecode/crawl4ai:0.8.6}"
     ports:
       - "19235:11235"
     environment:
-      CRAWL4AI_API_TOKEN: "dev-change-me"
+      CRAWL4AI_API_TOKEN: "${CRAWL4AI_API_TOKEN:-sourceweave-local-crawl4ai-token-change-before-exposing}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:11235/health >/dev/null || exit 1"]
       interval: 15s

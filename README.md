@@ -1,22 +1,49 @@
 # SourceWeave Web Search
 
-Web search and crawl tool that ships in two forms:
+Web search and crawl tool with two delivery paths:
 
-- a generated standalone OpenWebUI tool file for copy/paste
-- installable CLI and MCP entry points for `uv run` and `uvx`
+- an installable package that exposes `sourceweave-search` and `sourceweave-search-mcp`
+- a repo-generated standalone OpenWebUI artifact at `artifacts/sourceweave_web_search.py`
 
-## What It Includes
+## Choose The Right Workflow
+
+### Published package users
+
+Use the installed entry points and your own runtime services.
+
+- install with `pip install sourceweave-web-search`
+- or, once published, run with `uvx --from sourceweave-web-search ...`
+- use `sourceweave-search` for direct CLI calls
+- use `sourceweave-search-mcp` for MCP clients
+
+The published wheel is intentionally lean. It does **not** install repo-only helpers like `docker-compose.yml`, `infrastructure/`, `scripts/`, `tests/`, `skills/`, or the checked-in OpenWebUI artifact under `artifacts/`.
+
+### Repo checkout users
+
+Use a git checkout when you need any of the following:
+
+- the checked-in `artifacts/sourceweave_web_search.py` file for copy/paste deployment
+- the local Docker Compose stack in `docker-compose.yml` and `infrastructure/*.yml`
+- the wrapper scripts in `scripts/`
+- the packaging and runtime tests in `tests/`
+
+## What The Repo Includes
+
+Shared package source:
 
 - `src/sourceweave_web_search/tool.py`: canonical tool implementation used by the package, CLI, and MCP server
-- `artifacts/sourceweave_web_search.py`: generated standalone OpenWebUI artifact copied from `src/sourceweave_web_search/tool.py`
 - `src/sourceweave_web_search/cli.py`: package CLI for direct tool calls
 - `src/sourceweave_web_search/mcp_server.py`: MCP server entry point for `uvx` and MCP clients
-- `src/sourceweave_web_search/build_openwebui.py`: build/check logic for the OpenWebUI artifact
+- `src/sourceweave_web_search/build_openwebui.py`: build/check logic for the standalone OpenWebUI artifact
+
+Repo-local helpers:
+
+- `artifacts/sourceweave_web_search.py`: checked-in standalone OpenWebUI artifact copied from `src/sourceweave_web_search/tool.py`
 - `docker-compose.yml`: root compose entrypoint with the `mcp` service and include-based dependency fragments
 - `infrastructure/*.yml`: per-service compose fragments for `redis`, `crawl4ai`, and `searxng`
-- `scripts/run_tool_call.py`: thin wrapper around the package CLI for the existing local harness workflow
-- `scripts/build_openwebui_tool.py`: thin wrapper that regenerates or checks the standalone OpenWebUI file
-- `tests/`: standalone integration checks that call the tool directly
+- `scripts/run_tool_call.py`: thin wrapper around the package CLI for the local harness workflow
+- `scripts/build_openwebui_tool.py`: thin wrapper that validates or regenerates the standalone OpenWebUI file from a repo checkout
+- `tests/`: local integration and packaging checks
 - `skills/sourceweave-search-tool-testing/`: repo-local skill describing the local testing workflow
 
 ## Architecture
@@ -24,18 +51,71 @@ Web search and crawl tool that ships in two forms:
 The code under `src/` is the source of truth.
 
 - `src/sourceweave_web_search/tool.py` contains the real implementation.
-- `artifacts/sourceweave_web_search.py` is an artifact generated from it.
+- `artifacts/sourceweave_web_search.py` is a generated artifact checked into the repo.
 - `search_and_crawl` and batched `read_page` are exposed through both the CLI and MCP server.
 
-Keep edits in the main module and then verify the OpenWebUI artifact is still in sync:
+From a repo checkout, verify artifact drift without rewriting the artifact:
 
 ```bash
 uv run sourceweave-build-openwebui --check
 ```
 
-## Local Setup
+## Published Package Usage
 
-1. Start the MCP stack:
+After installing the package, call the CLI directly:
+
+```bash
+sourceweave-search --query "python programming" --read-first-pages 2
+```
+
+Run the MCP server from the installed package:
+
+```bash
+sourceweave-search-mcp
+```
+
+Or, once the package is published, use `uvx` without cloning the repo:
+
+```bash
+uvx --from sourceweave-web-search sourceweave-search --query "python programming" --read-first-pages 2
+uvx --from sourceweave-web-search sourceweave-search-mcp
+```
+
+For host-side use, point the package at your own services with environment variables:
+
+```bash
+SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://localhost:19080/search?format=json&q=<query>" \
+SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://localhost:19235" \
+SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://localhost:16379/2" \
+sourceweave-search --query "python programming" --read-first-pages 2
+```
+
+The published package does not start Redis, Crawl4AI, or SearXNG for you; it only exposes the Python entry points.
+
+### Containerized MCP deployment
+
+The repo also includes a production-style `Dockerfile` that installs the package into an image instead of bind-mounting the checkout:
+
+```bash
+docker build -t sourceweave-web-search .
+docker run --rm -p 18000:8000 \
+  -e SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://host.docker.internal:19080/search?format=json&q=<query>" \
+  -e SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://host.docker.internal:19235" \
+  -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
+  sourceweave-web-search
+```
+
+That image only packages the Python service. You still need to provide reachable SearXNG, Crawl4AI, and Redis endpoints through environment variables.
+
+## Repo-Local Setup
+
+Optionally copy `.env.example` to `.env` before starting the local stack. The compose fragments use pinned image tags and local-only placeholder secrets so you can override them without editing tracked files.
+
+```bash
+cp .env.example .env
+```
+
+Start the MCP stack:
 
 ```bash
 docker compose up -d mcp
@@ -43,7 +123,7 @@ docker compose up -d mcp
 
 That starts the `mcp` service and its included dependencies. The HTTP MCP endpoint is exposed at `http://localhost:18000/mcp`.
 
-2. Run a direct tool call in a one-off container that uses the same service definition:
+Run a direct tool call in a one-off container that uses the same service definition:
 
 ```bash
 docker compose run --rm mcp uv run sourceweave-search \
@@ -65,64 +145,12 @@ docker compose run --rm mcp uv run python scripts/run_tool_call.py \
   --pretty
 ```
 
-## MCP And uvx
-
-Run the Docker-managed MCP server:
-
-```bash
-docker compose up -d mcp
-```
-
-Then connect a client to:
-
-```text
-http://localhost:18000/mcp
-```
-
-Run the MCP server from the repo:
+From a repo checkout, `uvx --from .` still works for the package entry points:
 
 ```bash
 uvx --from . sourceweave-search-mcp
-```
-
-Run the package CLI from the repo:
-
-```bash
 uvx --from . sourceweave-search --query "python programming" --read-first-pages 2
 ```
-
-For host-side use, prefer explicit runtime overrides instead of changing code:
-
-```bash
-SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://localhost:19080/search?format=json&q=<query>" \
-SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://localhost:19235" \
-SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://localhost:16379/2" \
-uvx --from . sourceweave-search --query "python programming" --read-first-pages 2
-```
-
-## Automated Checks
-
-Run the standalone runtime checks inside a one-off `mcp` container:
-
-```bash
-docker compose run --rm mcp uv run pytest tests/test_packaging.py
-docker compose run --rm mcp uv run pytest tests/test_tool.py
-docker compose run --rm mcp uv run python tests/test_phase4.py
-```
-
-`tests/test_packaging.py` verifies the package surfaces:
-
-- the generated OpenWebUI artifact is in sync with the package source
-- the package CLI can be invoked
-- the MCP server exposes `search_and_crawl` and `read_page`
-
-`tests/test_tool.py` verifies the main tool contract:
-
-- `search_and_crawl(query=..., depth=...)` returns results with `page_id`
-- `read_page(page_ids=[...])` batches full content reads across one or more pages
-- cached `page_id` lookups still work from a fresh `Tools()` instance
-
-`tests/test_phase4.py` keeps the lower-level Crawl4AI BM25 checks.
 
 ## Defaults
 
@@ -145,9 +173,42 @@ Default host ports used by this repo:
 - Redis: `16379`
 - MCP: `18000` at `/mcp`
 
+For safer checked-in deployment defaults, the compose fragments avoid floating image tags and expose overridable environment variables for the local-only SearXNG secret and Crawl4AI token. Replace those placeholders before exposing the stack beyond localhost.
+
+## Automated Checks
+
+Local release-gate checks:
+
+```bash
+uv run sourceweave-build-openwebui --check
+uv run pytest tests/test_packaging.py
+uv build --no-sources --sdist --wheel --out-dir dist/release-gate --clear --no-create-gitignore
+```
+
+Additional local runtime checks:
+
+```bash
+uv run pytest tests/test_tool.py
+docker compose run --rm mcp uv run python tests/test_phase4.py
+```
+
+`tests/test_packaging.py` verifies that:
+
+- the checked-in OpenWebUI artifact is validated in strict `--check` mode without being rewritten
+- the package CLI can be invoked
+- the MCP server exposes `search_and_crawl` and `read_page`
+- publishable wheels and sdists include the README metadata and LICENSE file while keeping repo-only files out of the wheel
+
+`tests/test_tool.py` verifies the main tool contract:
+
+- `search_and_crawl(query=..., depth=...)` returns results with `page_id`
+- `read_page(page_ids=[...])` batches full content reads across one or more pages
+- cached `page_id` lookups still work from a fresh `Tools()` instance
+
+`tests/test_phase4.py` keeps the lower-level Crawl4AI BM25 checks.
+
 ## Notes
 
-- The repo now supports both copy/paste OpenWebUI delivery and installable CLI/MCP delivery from the same codebase.
-- Keep manual edits in `src/sourceweave_web_search/tool.py`, then regenerate or check `artifacts/sourceweave_web_search.py`.
+- Keep manual edits in `src/sourceweave_web_search/tool.py`, then regenerate or check `artifacts/sourceweave_web_search.py` from a repo checkout.
 - Paste `artifacts/sourceweave_web_search.py` into OpenWebUI when you are ready to deploy the standalone tool file.
-- `read_page(page_ids=[...])` now supports batched page reads and still falls back to Redis-backed cached page content, so follow-up reads are more stable across fresh tool instances.
+- `read_page(page_ids=[...])` supports batched page reads and still falls back to Redis-backed cached page content, so follow-up reads are more stable across fresh tool instances.

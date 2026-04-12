@@ -1,0 +1,100 @@
+name: release-gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release-gate.yml"
+      - ".env.example"
+      - ".gitignore"
+      - "LICENSE"
+      - "README.md"
+      - "docker-compose.yml"
+      - "infrastructure/**"
+      - "pyproject.toml"
+      - "scripts/build_openwebui_tool.py"
+      - "src/sourceweave_web_search/config.py"
+      - "src/sourceweave_web_search/build_openwebui.py"
+      - "src/sourceweave_web_search/tool.py"
+      - "tests/test_config.py"
+      - "tests/test_packaging.py"
+      - "tests/test_tool.py"
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - ".github/workflows/release-gate.yml"
+      - ".env.example"
+      - ".gitignore"
+      - "LICENSE"
+      - "README.md"
+      - "docker-compose.yml"
+      - "infrastructure/**"
+      - "pyproject.toml"
+      - "scripts/build_openwebui_tool.py"
+      - "src/sourceweave_web_search/config.py"
+      - "src/sourceweave_web_search/build_openwebui.py"
+      - "src/sourceweave_web_search/tool.py"
+      - "tests/test_config.py"
+      - "tests/test_packaging.py"
+      - "tests/test_tool.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      UV_LINK_MODE: copy
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install project dependencies
+        run: uv sync --locked --group dev
+
+      - name: Check OpenWebUI artifact drift
+        run: uv run sourceweave-build-openwebui --check
+
+      - name: Run lint checks
+        run: uv run ruff check src tests
+
+      - name: Run type checks
+        run: uv run mypy
+
+      - name: Run deterministic packaging and runtime tests
+        run: uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py -m "not integration"
+
+      - name: Build publishable distributions
+        run: uv build --no-sources --sdist --wheel --out-dir dist/release-gate --clear --no-create-gitignore
+
+      - name: Smoke install built wheel
+        shell: bash
+        run: |
+          python -m venv .release-gate-wheel-venv
+          . .release-gate-wheel-venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install dist/release-gate/*.whl
+          sourceweave-search --help
+          sourceweave-search-mcp --help
+
+      - name: Smoke install built sdist
+        shell: bash
+        run: |
+          python -m venv .release-gate-sdist-venv
+          . .release-gate-sdist-venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install dist/release-gate/*.tar.gz
+          sourceweave-search --help
+          sourceweave-search-mcp --help

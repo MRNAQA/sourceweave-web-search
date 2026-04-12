@@ -1,6 +1,6 @@
 services:
   searxng:
-    image: searxng/searxng:latest
+    image: "${SEARXNG_IMAGE:-searxng/searxng:2026.4.11-9e08a6771}"
     ports:
       - "19080:8080"
     entrypoint:
@@ -12,7 +12,7 @@ services:
         fi
         exec /usr/local/searxng/entrypoint.sh
     environment:
-      SEARXNG_SECRET: "dev-change-me"
+      SEARXNG_SECRET: "${SEARXNG_SECRET:-sourceweave-local-searxng-secret-change-before-exposing}"
       SEARXNG_LIMITER: "false"
       SEARXNG_IMAGE_PROXY: "false"
     volumes:

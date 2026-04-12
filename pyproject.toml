@@ -3,9 +3,21 @@ name = "sourceweave-web-search"
 version = "0.2.0"
 description = "SourceWeave: AI web search with OpenWebUI and MCP delivery targets"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Mohammad ElNaqa", email = "55245971+MRNAQA@users.noreply.github.com" }
+]
+keywords = ["crawl4ai", "mcp", "openwebui", "search", "web-search"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -25,10 +37,28 @@ sourceweave-build-openwebui = "sourceweave_web_search.build_openwebui:main"
 [dependency-groups]
 dev = [
     "crawl4ai",
+    "mypy",
     "pytest",
+    "ruff",
     "requests",
+    "types-requests",
 ]
 
 [build-system]
 requires = ["uv_build>=0.10.0,<0.11.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires live services or network-backed runtime dependencies",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/sourceweave_web_search", "tests"]
+exclude = ["tests/test_phase4.py"]
+ignore_missing_imports = true
+check_untyped_defs = true

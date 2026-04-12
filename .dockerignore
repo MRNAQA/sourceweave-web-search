@@ -1,0 +1,14 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+artifacts
+build
+dist
+docker-compose.yml
+infrastructure
+scripts
+skills
+tests

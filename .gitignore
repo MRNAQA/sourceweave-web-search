@@ -10,5 +10,10 @@ wheels/
 .venv
 __pycache__/
 *.pyc
-artifacts/
+artifacts/*
+!artifacts/
+!artifacts/sourceweave_web_search.py
 .pytest_cache/
+.env
+.env.*
+!.env.example
