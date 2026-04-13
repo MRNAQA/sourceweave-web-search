@@ -82,7 +82,8 @@ def test_release_metadata_is_in_sync() -> None:
     ).read_text(encoding="utf-8")
     assert f"version: {version}" in tool_source
     assert f'"version": "{version}"' in server_json
-    assert f"ghcr.io/mrnaqa/sourceweave-web-search-mcp:{version}" in server_json
+    assert '"registryType": "pypi"' in server_json
+    assert '"identifier": "sourceweave-web-search"' in server_json
     assert 'org.opencontainers.image.title="sourceweave-web-search-mcp"' in dockerfile
     assert f'org.opencontainers.image.version="{version}"' in dockerfile
     assert (
