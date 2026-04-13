@@ -142,7 +142,7 @@ services:
 
 That gives you a local HTTP MCP endpoint at `http://127.0.0.1:8000/mcp` with the SourceWeave container linked to the supporting services by container name.
 
-The repo's own `docker compose up -d mcp` path also builds and runs this same publishable image locally as `sourceweave-web-search-mcp:local`, instead of wrapping the repo in the `uv` base image.
+The repo's own `docker compose up -d --build mcp` path also builds and runs this same publishable image locally.
 
 ## Runtime Configuration
 

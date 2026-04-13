@@ -28,6 +28,10 @@ def dockerfile_path() -> Path:
     return repo_root() / "Dockerfile"
 
 
+def docker_compose_path() -> Path:
+    return repo_root() / "docker-compose.yml"
+
+
 def project_version() -> str:
     data = tomllib.loads(pyproject_path().read_text(encoding="utf-8"))
     return data["project"]["version"]
@@ -97,12 +101,33 @@ def _sync_dockerfile_labels(version: str, check: bool) -> bool:
     return True
 
 
+def _sync_docker_compose_image(version: str, check: bool) -> bool:
+    path = docker_compose_path()
+    original = path.read_text(encoding="utf-8")
+    updated, replacements = re.subn(
+        r"(?m)^(\s*image:\s*ghcr\.io/mrnaqa/sourceweave-web-search-mcp:).+$",
+        rf"\g<1>{version}",
+        original,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError(f"Could not find a single compose image reference in {path}")
+
+    if check:
+        return original == updated
+
+    if original != updated:
+        path.write_text(updated, encoding="utf-8")
+    return True
+
+
 def sync_release_metadata(check: bool = False) -> bool:
     version = project_version()
     checks = [
         _sync_tool_header(version, check=check),
         _sync_server_json(version, check=check),
         _sync_dockerfile_labels(version, check=check),
+        _sync_docker_compose_image(version, check=check),
     ]
     return all(checks)
 

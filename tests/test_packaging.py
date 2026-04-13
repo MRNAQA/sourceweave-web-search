@@ -15,7 +15,11 @@ from sourceweave_web_search.build_openwebui import (
     default_output_path,
 )
 from sourceweave_web_search.mcp_server import build_mcp_server
-from sourceweave_web_search.release_metadata import project_version, server_json_path
+from sourceweave_web_search.release_metadata import (
+    docker_compose_path,
+    project_version,
+    server_json_path,
+)
 from sourceweave_web_search.tool import Tools
 
 
@@ -76,6 +80,7 @@ def test_release_metadata_is_in_sync() -> None:
     tool_source = canonical_tool_path().read_text(encoding="utf-8")
     server_json = server_json_path().read_text(encoding="utf-8")
     dockerfile = _repo_root().joinpath("Dockerfile").read_text(encoding="utf-8")
+    docker_compose = docker_compose_path().read_text(encoding="utf-8")
 
     assert f'version = "{version}"' in _repo_root().joinpath(
         "pyproject.toml"
@@ -89,6 +94,9 @@ def test_release_metadata_is_in_sync() -> None:
     assert (
         'io.modelcontextprotocol.server.name="io.github.MRNAQA/sourceweave-web-search"'
         in dockerfile
+    )
+    assert (
+        f"image: ghcr.io/mrnaqa/sourceweave-web-search-mcp:{version}" in docker_compose
     )
 
 
