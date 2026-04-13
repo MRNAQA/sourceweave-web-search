@@ -3,6 +3,7 @@ name: release-gate
 on:
   pull_request:
     paths:
+      - ".github/workflows/release.yml"
       - ".github/workflows/release-gate.yml"
       - ".env.example"
       - ".gitignore"
@@ -23,9 +24,9 @@ on:
       - "tests/test_tool.py"
   push:
     branches:
-      - master
       - main
     paths:
+      - ".github/workflows/release.yml"
       - ".github/workflows/release-gate.yml"
       - ".env.example"
       - ".gitignore"

@@ -1,0 +1,128 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create, for example v0.2.0. Must match pyproject.toml version."
+        required: true
+        type: string
+      release_name:
+        description: "Optional GitHub release title. Defaults to the tag."
+        required: false
+        type: string
+      target_ref:
+        description: "Branch or commit to tag and release. Usually main."
+        required: true
+        default: "main"
+        type: string
+      prerelease:
+        description: "Mark the GitHub release as a prerelease."
+        required: true
+        default: false
+        type: boolean
+      changelog:
+        description: "Markdown release notes/changelog for this release."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      UV_LINK_MODE: copy
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Verify tag matches project version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION=$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          data = tomllib.loads(Path("pyproject.toml").read_text())
+          print(data["project"]["version"])
+          PY
+          )
+          EXPECTED_TAG="v${PACKAGE_VERSION}"
+          if [ "${{ inputs.tag }}" != "$EXPECTED_TAG" ]; then
+            echo "Expected release tag $EXPECTED_TAG but got ${{ inputs.tag }}" >&2
+            exit 1
+          fi
+
+      - name: Install project dependencies
+        run: uv sync --locked --group dev
+
+      - name: Check OpenWebUI artifact drift
+        run: uv run sourceweave-build-openwebui --check
+
+      - name: Run lint checks
+        run: uv run ruff check src tests
+
+      - name: Run type checks
+        run: uv run mypy
+
+      - name: Run deterministic packaging and runtime tests
+        run: uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py -m "not integration"
+
+      - name: Build release distributions
+        run: uv build --no-sources --sdist --wheel --out-dir dist/release --clear --no-create-gitignore
+
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum artifacts/sourceweave_web_search.py dist/release/* > dist/release/SHA256SUMS.txt
+
+      - name: Write release notes
+        env:
+          CHANGELOG: ${{ inputs.changelog }}
+        run: printf '%s\n' "$CHANGELOG" > RELEASE_NOTES.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TITLE="$RELEASE_NAME"
+          if [ -z "$TITLE" ]; then
+            TITLE="$TAG_NAME"
+          fi
+          EXTRA_ARGS=()
+          if [ "$PRERELEASE" = "true" ]; then
+            EXTRA_ARGS+=(--prerelease)
+          fi
+          gh release create "$TAG_NAME" \
+            --target "$TARGET_REF" \
+            --title "$TITLE" \
+            --notes-file RELEASE_NOTES.md \
+            "${EXTRA_ARGS[@]}" \
+            artifacts/sourceweave_web_search.py \
+            dist/release/*
