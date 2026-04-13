@@ -64,7 +64,7 @@ ReadPageIds = Annotated[
     list[str],
     Field(
         description=(
-            "One or more page_ids returned by search_and_crawl. Batch related pages into one "
+            "One or more page_ids returned by search_web. Batch related pages into one "
             "call when comparing or synthesizing multiple sources."
         )
     ),
@@ -105,32 +105,37 @@ def _mcp_port() -> int:
     return int(os.getenv("FASTMCP_PORT", "8000"))
 
 
-def build_mcp_server(tool: Tools | None = None) -> FastMCP:
+def build_mcp_server(
+    tool: Tools | None = None,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+) -> FastMCP:
     tool_instance = tool or build_tools()
     server = FastMCP(
         "sourceweave-web-search",
-        host=_mcp_host(),
-        port=_mcp_port(),
+        host=host or _mcp_host(),
+        port=port if port is not None else _mcp_port(),
     )
 
     @server.tool(
-        name="search_and_crawl",
+        name="search_web",
         description=(
             "Search the web for relevant sources and crawl the selected pages. "
             "Use concise retrieval-style queries, quote exact errors, and add site: filters when domain preference matters. "
-            "Returns compact summaries plus page_ids. Use read_page next when you need full content. "
+            "Returns compact summaries plus page_ids. Use read_pages next when you need full content. "
             "If you already know an important URL, pass it in urls; use convert_document for explicit document URLs like PDFs. "
             "Low-utility crawled pages may include page_quality such as challenge or blocked."
         ),
     )
-    async def search_and_crawl(
+    async def search_web(
         query: SearchQuery,
         urls: SearchUrls = None,
         depth: SearchDepth = "normal",
         max_results: SearchMaxResults = None,
         fresh: SearchFresh = False,
     ):
-        return await tool_instance.search_and_crawl(
+        return await tool_instance.search_web(
             query=query,
             urls=urls,
             depth=depth,
@@ -139,7 +144,7 @@ def build_mcp_server(tool: Tools | None = None) -> FastMCP:
         )
 
     @server.tool(
-        name="read_page",
+        name="read_pages",
         description=(
             "Retrieve the full cleaned content for one or more previously returned page_ids. "
             "Prefer batching related page_ids in a single call. Use focus to extract the most relevant sections. "
@@ -147,13 +152,13 @@ def build_mcp_server(tool: Tools | None = None) -> FastMCP:
             "Returned pages may include page_quality when a page looks challenge-like or blocked."
         ),
     )
-    async def read_page(
+    async def read_pages(
         page_ids: ReadPageIds,
         focus: ReadFocus = "",
         related_links_limit: ReadRelatedLinksLimit = 3,
         max_chars: ReadMaxChars = 8000,
     ):
-        return await tool_instance.read_page(
+        return await tool_instance.read_pages(
             page_ids,
             focus=focus,
             related_links_limit=related_links_limit,
@@ -173,12 +178,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="stdio",
         help="MCP transport to run. stdio is the default for uvx-based MCP clients.",
     )
+    parser.add_argument(
+        "--host",
+        help=(
+            "Host to bind for sse or streamable-http transport. "
+            "Ignored for stdio. Defaults to FASTMCP_HOST or 127.0.0.1."
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help=(
+            "Port to bind for sse or streamable-http transport. "
+            "Ignored for stdio. Defaults to FASTMCP_PORT or 8000."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    build_mcp_server().run(transport=args.transport)
+    build_mcp_server(host=args.host, port=args.port).run(transport=args.transport)
     return 0
 
 

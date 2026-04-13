@@ -5,11 +5,31 @@ build/
 dist/
 wheels/
 *.egg-info
+.coverage
+.coverage.*
+.mypy_cache/
+.ruff_cache/
+htmlcov/
 
 # Virtual environments
 .venv
-__pycache__/
-*.pyc
+.review-venv/
+.review-sdist-venv/
+.verify-wheel-venv/
+.verify-sdist-venv/
+
+# Local editor / client config
+.idea/
+.DS_Store
+*.swp
+*.code-workspace
+opencode.json
+opencode.jsonc
+.vscode/mcp.json
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+
 artifacts/*
 !artifacts/
 !artifacts/sourceweave_web_search.py
@@ -17,3 +37,4 @@ artifacts/*
 .env
 .env.*
 !.env.example
+.sourceweave-local/

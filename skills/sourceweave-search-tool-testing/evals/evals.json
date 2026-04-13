@@ -3,8 +3,8 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Validate artifacts/sourceweave_web_search.py locally without OpenWebUI. Use the repo's standalone workflow, run a quick search for 'python programming', and verify read_page on the first result.",
-      "expected_output": "Runs the standalone harness with deployment-aligned defaults and reports whether search_and_crawl plus read_page behave correctly.",
+      "prompt": "Validate artifacts/sourceweave_web_search.py locally without OpenWebUI. Use the repo's standalone workflow, run a quick search for 'python programming', and verify read_pages on the first result.",
+      "expected_output": "Runs the standalone harness with deployment-aligned defaults and reports whether search_web plus read_pages behave correctly.",
       "files": []
     },
     {
@@ -16,7 +16,7 @@
     {
       "id": 3,
       "prompt": "Run the direct tool-call tests for artifacts/sourceweave_web_search.py and focus on whether page_id results can be read back from a fresh tool instance.",
-      "expected_output": "Uses the standalone checks and specifically validates the page_id/read_page follow-up behavior.",
+      "expected_output": "Uses the standalone checks and specifically validates the page_id/read_pages follow-up behavior.",
       "files": []
     }
   ]

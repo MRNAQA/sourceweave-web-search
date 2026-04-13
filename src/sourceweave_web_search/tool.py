@@ -1,6 +1,6 @@
 """
 title: SourceWeave Web Search
-description: AI web search tool with two explicit actions: search_and_crawl for source discovery and read_page for full-page retrieval. Uses SearXNG for search, Crawl4AI for HTML extraction, and MarkItDown for document conversion.
+description: AI web search tool with two explicit actions: search_web for source discovery and read_pages for full-page retrieval. Uses SearXNG for search, Crawl4AI for HTML extraction, and MarkItDown for document conversion.
 author: Mohammad ElNaqa
 author_url: https://github.com/MRNAQA
 version: 0.2.0
@@ -8,8 +8,8 @@ license: MIT
 requirements: aiohttp, loguru, markitdown, redis>=5.0
 
 Two-tool architecture:
-    search_and_crawl(query, depth) -> compact summaries + page_ids (token-cheap discovery)
-    read_page(page_ids, focus?)    -> full page content for one or more pages (batch related reads when needed)
+    search_web(query, depth) -> compact summaries + page_ids (token-cheap discovery)
+    read_pages(page_ids, focus?) -> full page content for one or more pages (batch related reads when needed)
 
 Full content is stored in an in-process PageStore and cached in Valkey/Redis.
 SearXNG defines search ordering; Crawl4AI enriches results in place without reranking.
@@ -449,12 +449,12 @@ class Tools:
             {
                 "type": "function",
                 "function": {
-                    "name": "search_and_crawl",
+                    "name": "search_web",
                     "description": (
                         "Search the web and crawl pages. Returns compact summaries with page_ids. "
-                        "If summaries are not enough, batch one or more page_ids into read_page(page_ids=[...]) for full content. "
+                        "If summaries are not enough, batch one or more page_ids into read_pages(page_ids=[...]) for full content. "
                         "Prefer concise retrieval-style queries, quote exact error strings, and use site: when domain preference matters. "
-                        "Prefer one batched read_page call over repeated single-page calls when comparing multiple sources. "
+                        "Prefer one batched read_pages call over repeated single-page calls when comparing multiple sources. "
                         "If you already know an important URL, pass it in urls; use convert_document for explicit document URLs like PDFs."
                     ),
                     "parameters": {
@@ -513,10 +513,10 @@ class Tools:
             {
                 "type": "function",
                 "function": {
-                    "name": "read_page",
+                    "name": "read_pages",
                     "description": (
-                        "Get the full cleaned content for one or more pages from prior search_and_crawl results. "
-                        "Prefer batching related page_ids in one call instead of calling read_page repeatedly. "
+                        "Get the full cleaned content for one or more pages from prior search_web results. "
+                        "Prefer batching related page_ids in one call instead of calling read_pages repeatedly. "
                         "Use focus to extract the most relevant sections, and set related_links_limit=0 when you only want content without page-adjacent links."
                     ),
                     "parameters": {
@@ -525,7 +525,7 @@ class Tools:
                             "page_ids": {
                                 "type": "array",
                                 "description": (
-                                    "One or more page_ids returned by search_and_crawl. "
+                                    "One or more page_ids returned by search_web. "
                                     "Batch related pages into a single call when you need to compare or synthesize multiple sources."
                                 ),
                                 "items": {"type": "string"},
@@ -1557,7 +1557,7 @@ class Tools:
         if not record:
             return {
                 "page_id": page_id,
-                "error": f"page_id '{page_id}' not found or expired. Call search_and_crawl again.",
+                "error": f"page_id '{page_id}' not found or expired. Call search_web again.",
             }
 
         if __event_emitter__:
@@ -1637,7 +1637,7 @@ class Tools:
             )
         return result
 
-    async def read_page(
+    async def read_pages(
         self,
         page_ids: Union[str, List[str]],
         focus: str = "",
@@ -1691,7 +1691,7 @@ class Tools:
             "returned_pages": len(pages),
         }
 
-    async def search_and_crawl(
+    async def search_web(
         self,
         query: str,
         urls: Optional[List[Any]] = None,

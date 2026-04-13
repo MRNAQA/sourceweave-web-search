@@ -10,7 +10,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from sourceweave_web_search.build_openwebui import canonical_tool_path, default_output_path
+from sourceweave_web_search.build_openwebui import (
+    canonical_tool_path,
+    default_output_path,
+)
 from sourceweave_web_search.mcp_server import build_mcp_server
 from sourceweave_web_search.tool import Tools
 
@@ -131,24 +134,39 @@ def test_built_distributions_ship_publishable_metadata() -> None:
         )
         metadata = message_from_bytes(wheel_archive.read(metadata_path))
 
-    assert any(
-        name.endswith(".dist-info/licenses/LICENSE") for name in wheel_names
-    ), wheel_names
+    assert any(name.endswith(".dist-info/licenses/LICENSE") for name in wheel_names), (
+        wheel_names
+    )
     assert metadata["Name"] == "sourceweave-web-search"
     assert metadata["Description-Content-Type"] == "text/markdown"
     assert metadata["Requires-Python"] == ">=3.12"
     assert metadata["License-Expression"] == "MIT"
     assert metadata.get_all("License-File") == ["LICENSE"]
     assert "crawl4ai" in (metadata.get("Keywords") or "")
+    project_urls = metadata.get_all("Project-URL") or []
 
     classifiers = metadata.get_all("Classifier") or []
     assert "License :: OSI Approved :: MIT License" in classifiers
     assert "Programming Language :: Python :: 3.12" in classifiers
+    assert "Homepage, https://github.com/MRNAQA/sourceweave-web-search" in project_urls
+    assert (
+        "Repository, https://github.com/MRNAQA/sourceweave-web-search" in project_urls
+    )
+    assert (
+        "Issues, https://github.com/MRNAQA/sourceweave-web-search/issues"
+        in project_urls
+    )
 
-    for repo_only_prefix in ("artifacts/", "infrastructure/", "scripts/", "skills/", "tests/"):
-        assert not any(
-            name.startswith(repo_only_prefix) for name in wheel_names
-        ), wheel_names
+    for repo_only_prefix in (
+        "artifacts/",
+        "infrastructure/",
+        "scripts/",
+        "skills/",
+        "tests/",
+    ):
+        assert not any(name.startswith(repo_only_prefix) for name in wheel_names), (
+            wheel_names
+        )
     assert "docker-compose.yml" not in wheel_names, wheel_names
 
     sdist_root = sdist_path.name.removesuffix(".tar.gz")
@@ -172,11 +190,26 @@ def test_cli_module_help_smoke() -> None:
     assert "--read-first-pages" in result.stdout, result.stdout
 
 
+def test_mcp_module_help_smoke() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "sourceweave_web_search.mcp_server", "--help"],
+        cwd=_repo_root(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "--transport" in result.stdout, result.stdout
+    assert "--host" in result.stdout, result.stdout
+    assert "--port" in result.stdout, result.stdout
+
+
 def test_mcp_server_exposes_expected_tools() -> None:
     async def scenario() -> None:
         server = build_mcp_server()
         tool_names = sorted(tool.name for tool in await server.list_tools())
-        assert tool_names == ["read_page", "search_and_crawl"], tool_names
+        assert tool_names == ["read_pages", "search_web"], tool_names
 
     asyncio.run(scenario())
 
@@ -184,6 +217,8 @@ def test_mcp_server_exposes_expected_tools() -> None:
 def test_default_tool_endpoints_target_host_ports() -> None:
     valves = Tools.Valves()
 
-    assert valves.SEARXNG_BASE_URL == "http://127.0.0.1:19080/search?format=json&q=<query>"
+    assert (
+        valves.SEARXNG_BASE_URL == "http://127.0.0.1:19080/search?format=json&q=<query>"
+    )
     assert valves.CRAWL4AI_BASE_URL == "http://127.0.0.1:19235"
     assert valves.CACHE_REDIS_URL == "redis://127.0.0.1:16379/2"

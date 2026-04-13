@@ -1,14 +1,14 @@
 [project]
 name = "sourceweave-web-search"
 version = "0.2.0"
-description = "SourceWeave: AI web search with OpenWebUI and MCP delivery targets"
+description = "MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     { name = "Mohammad ElNaqa", email = "55245971+MRNAQA@users.noreply.github.com" }
 ]
-keywords = ["crawl4ai", "mcp", "openwebui", "search", "web-search"]
+keywords = ["crawl4ai", "mcp", "model-context-protocol", "openwebui", "search", "web-search"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -28,6 +28,11 @@ dependencies = [
     "pydantic",
     "redis>=5.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MRNAQA/sourceweave-web-search"
+Repository = "https://github.com/MRNAQA/sourceweave-web-search"
+Issues = "https://github.com/MRNAQA/sourceweave-web-search/issues"
 
 [project.scripts]
 sourceweave-search = "sourceweave_web_search.cli:main"

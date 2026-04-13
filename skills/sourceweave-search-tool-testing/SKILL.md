@@ -1,6 +1,6 @@
 ---
 name: sourceweave-search-tool-testing
-description: Use this whenever the user wants to validate `artifacts/sourceweave_web_search.py` locally before deployment, especially when they mention testing a tool without the target app, simulating model tool calls, checking `search_and_crawl` and `read_page` outputs, or confirming deployment-aligned defaults and valves. This skill should also trigger when the user wants to debug whether the tool will work in deployment without changing service URLs or ports.
+description: Use this whenever the user wants to validate `artifacts/sourceweave_web_search.py` locally before deployment, especially when they mention testing a tool without the target app, simulating model tool calls, checking `search_web` and `read_pages` outputs, or confirming deployment-aligned defaults and valves. This skill should also trigger when the user wants to debug whether the tool will work in deployment without changing service URLs or ports.
 ---
 
 # SourceWeave Web Search Tool Testing
@@ -14,9 +14,9 @@ The canonical source now lives under `src/sourceweave_web_search/tool.py`; `arti
 Validate the pasted-tool behavior directly:
 
 - instantiate `Tools()`
-- call `search_and_crawl(...)`
+- call `search_web(...)`
 - inspect the returned list shape and summaries
-- call `read_page(page_ids=[...], ...)`
+- call `read_pages(page_ids=[...], ...)`
 - confirm the default service URLs match deployment-style container names and ports
 
 ## Default assumptions
@@ -48,13 +48,13 @@ docker compose run --rm mcp uv run sourceweave-search \
   --pretty
 ```
 
-3. Check that `search_and_crawl` returns:
+3. Check that `search_web` returns:
 
 - a JSON list
 - at least one result for a healthy stack
 - `url`, `title`, `page_id`, `summary`, and `key_points`
 
-4. Check that `read_page` returns:
+4. Check that `read_pages` returns:
 
 - no `error`
 - the expected titles/urls

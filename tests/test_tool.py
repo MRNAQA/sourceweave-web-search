@@ -86,7 +86,7 @@ def _make_crawl_result(
 def test_search_and_read_round_trip() -> None:
     async def scenario() -> None:
         tool = Tools()
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="python programming",
             depth="quick",
             max_results=2,
@@ -94,7 +94,7 @@ def test_search_and_read_round_trip() -> None:
         )
 
         assert isinstance(results, list), results
-        assert results, "search_and_crawl returned no results"
+        assert results, "search_web returned no results"
 
         first = results[0]
         for key in (
@@ -110,7 +110,7 @@ def test_search_and_read_round_trip() -> None:
         ):
             assert key in first, f"missing key '{key}' in result: {first}"
 
-        page = await tool.read_page(first["page_id"], max_chars=1200)
+        page = await tool.read_pages(first["page_id"], max_chars=1200)
         assert "error" not in page, page
         assert len(page.get("content", "")) >= 200, page
 
@@ -118,10 +118,10 @@ def test_search_and_read_round_trip() -> None:
 
 
 @pytest.mark.integration
-def test_read_page_works_from_fresh_tool_instance() -> None:
+def test_read_pages_works_from_fresh_tool_instance() -> None:
     async def scenario() -> None:
         tool = Tools()
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="asyncio python tutorial",
             depth="quick",
             max_results=1,
@@ -129,18 +129,18 @@ def test_read_page_works_from_fresh_tool_instance() -> None:
         )
 
         assert isinstance(results, list), results
-        assert results, "search_and_crawl returned no results"
+        assert results, "search_web returned no results"
 
         page_id = results[0]["page_id"]
         fresh_tool = Tools()
-        page = await fresh_tool.read_page(page_id, max_chars=1000)
+        page = await fresh_tool.read_pages(page_id, max_chars=1000)
         assert "error" not in page, page
         assert len(page.get("content", "")) >= 200, page
 
     asyncio.run(scenario())
 
 
-def test_read_page_accepts_multiple_page_ids_in_one_call() -> None:
+def test_read_pages_accepts_multiple_page_ids_in_one_call() -> None:
     async def scenario() -> None:
         tool = Tools()
         first_page_id = tool._page_store.put(
@@ -154,7 +154,7 @@ def test_read_page_accepts_multiple_page_ids_in_one_call() -> None:
             "# Beta\n\nBeta content paragraph with enough text to be useful for a multi-page read.",
         )
 
-        pages = await tool.read_page([first_page_id, second_page_id], max_chars=200)
+        pages = await tool.read_pages([first_page_id, second_page_id], max_chars=200)
 
         assert "error" not in pages, pages
         assert pages["requested_page_ids"] == [first_page_id, second_page_id], pages
@@ -169,7 +169,7 @@ def test_read_page_accepts_multiple_page_ids_in_one_call() -> None:
     asyncio.run(scenario())
 
 
-def test_read_page_multi_returns_partial_errors_for_missing_ids() -> None:
+def test_read_pages_multi_returns_partial_errors_for_missing_ids() -> None:
     async def scenario() -> None:
         tool = Tools()
         first_page_id = tool._page_store.put(
@@ -178,7 +178,7 @@ def test_read_page_multi_returns_partial_errors_for_missing_ids() -> None:
             "# Gamma\n\nGamma content paragraph with enough text to survive truncation.",
         )
 
-        pages = await tool.read_page([first_page_id, "missing-page-id"], max_chars=200)
+        pages = await tool.read_pages([first_page_id, "missing-page-id"], max_chars=200)
 
         assert pages["returned_pages"] == 1, pages
         assert len(pages["pages"]) == 1, pages
@@ -186,14 +186,14 @@ def test_read_page_multi_returns_partial_errors_for_missing_ids() -> None:
         assert pages["errors"] == [
             {
                 "page_id": "missing-page-id",
-                "error": "page_id 'missing-page-id' not found or expired. Call search_and_crawl again.",
+                "error": "page_id 'missing-page-id' not found or expired. Call search_web again.",
             }
         ], pages
 
     asyncio.run(scenario())
 
 
-def test_read_page_returns_content_state_and_related_assets() -> None:
+def test_read_pages_returns_content_state_and_related_assets() -> None:
     async def scenario() -> None:
         tool = Tools()
         page_id = tool._page_store.put(
@@ -213,7 +213,7 @@ def test_read_page_returns_content_state_and_related_assets() -> None:
             images=[{"url": "https://example.com/image.png", "alt": "Guide image"}],
         )
 
-        page = await tool.read_page(
+        page = await tool.read_pages(
             page_id,
             focus="focus extraction",
             related_links_limit=1,
@@ -240,7 +240,7 @@ def test_read_page_returns_content_state_and_related_assets() -> None:
     asyncio.run(scenario())
 
 
-def test_search_and_read_page_mark_challenge_pages() -> None:
+def test_search_web_and_read_pages_mark_challenge_pages() -> None:
     async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
@@ -284,7 +284,7 @@ def test_search_and_read_page_mark_challenge_pages() -> None:
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
         try:
-            results = await tool.search_and_crawl(
+            results = await tool.search_web(
                 query="react useEffect cleanup",
                 depth="quick",
                 max_results=1,
@@ -292,7 +292,7 @@ def test_search_and_read_page_mark_challenge_pages() -> None:
             )
             assert results[0]["page_quality"] == "challenge", results
 
-            page = await tool.read_page(results[0]["page_id"], max_chars=400)
+            page = await tool.read_pages(results[0]["page_id"], max_chars=400)
             assert page["page_quality"] == "challenge", page
         finally:
             monkeypatch.undo()
@@ -300,7 +300,7 @@ def test_search_and_read_page_mark_challenge_pages() -> None:
     asyncio.run(scenario())
 
 
-def test_read_page_marks_blocked_pages() -> None:
+def test_read_pages_marks_blocked_pages() -> None:
     async def scenario() -> None:
         tool = Tools()
         page_id = tool._page_store.put(
@@ -312,7 +312,7 @@ def test_read_page_marks_blocked_pages() -> None:
             full_content_available=True,
         )
 
-        page = await tool.read_page(page_id, max_chars=500)
+        page = await tool.read_pages(page_id, max_chars=500)
 
         assert page["page_quality"] == "blocked", page
 
@@ -412,7 +412,7 @@ def test_explicit_urls_preserve_input_order_ahead_of_search_results(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="python reference pages",
             urls=explicit_urls,
             depth="quick",
@@ -473,7 +473,7 @@ def test_explicit_url_failure_returns_search_only_fallback(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="python about page",
             urls=[explicit_url],
             depth="quick",
@@ -490,7 +490,7 @@ def test_explicit_url_failure_returns_search_only_fallback(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_returns_empty_list_when_no_candidates(
+def test_search_web_returns_empty_list_when_no_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -505,7 +505,7 @@ def test_search_and_crawl_returns_empty_list_when_no_candidates(
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="nothing should be found",
             depth="quick",
             fresh=True,
@@ -516,7 +516,7 @@ def test_search_and_crawl_returns_empty_list_when_no_candidates(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_uses_single_search_call_and_preserves_order(
+def test_search_web_uses_single_search_call_and_preserves_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -570,7 +570,7 @@ def test_search_and_crawl_uses_single_search_call_and_preserves_order(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query=query,
             depth="quick",
             max_results=3,
@@ -585,7 +585,7 @@ def test_search_and_crawl_uses_single_search_call_and_preserves_order(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_fetches_html_pages_one_by_one(
+def test_search_web_fetches_html_pages_one_by_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -636,7 +636,7 @@ def test_search_and_crawl_fetches_html_pages_one_by_one(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=2,
@@ -649,7 +649,7 @@ def test_search_and_crawl_fetches_html_pages_one_by_one(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_falls_back_to_search_snippet_when_crawl_fails(
+def test_search_web_falls_back_to_search_snippet_when_crawl_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -682,7 +682,7 @@ def test_search_and_crawl_falls_back_to_search_snippet_when_crawl_fails(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -700,7 +700,7 @@ def test_search_and_crawl_falls_back_to_search_snippet_when_crawl_fails(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_records_metadata_for_per_url_failures(
+def test_search_web_records_metadata_for_per_url_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -762,7 +762,7 @@ def test_search_and_crawl_records_metadata_for_per_url_failures(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=2,
@@ -785,7 +785,7 @@ def test_search_and_crawl_records_metadata_for_per_url_failures(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_reuses_cached_crawled_page_record(
+def test_search_web_reuses_cached_crawled_page_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -823,7 +823,7 @@ def test_search_and_crawl_reuses_cached_crawled_page_record(
                         tool,
                         search_url,
                         "useEffect - React",
-                        "# useEffect\n\nFull page content saved during search_and_crawl.",
+                        "# useEffect\n\nFull page content saved during search_web.",
                         query or "",
                     )
                 ],
@@ -833,13 +833,13 @@ def test_search_and_crawl_reuses_cached_crawled_page_record(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        first_results = await tool.search_and_crawl(
+        first_results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
             fresh=False,
         )
-        second_results = await tool.search_and_crawl(
+        second_results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -860,7 +860,7 @@ def test_search_and_crawl_reuses_cached_crawled_page_record(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_does_not_reuse_search_only_fallback_as_full_page_cache(
+def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -895,7 +895,7 @@ def test_search_and_crawl_does_not_reuse_search_only_fallback_as_full_page_cache
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        first_results = await tool.search_and_crawl(
+        first_results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -928,7 +928,7 @@ def test_search_and_crawl_does_not_reuse_search_only_fallback_as_full_page_cache
 
         monkeypatch.setattr(tool, "_crawl_url", succeeding_crawl)
 
-        second_results = await tool.search_and_crawl(
+        second_results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -943,7 +943,7 @@ def test_search_and_crawl_does_not_reuse_search_only_fallback_as_full_page_cache
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_can_convert_documents_per_explicit_url(
+def test_search_web_can_convert_documents_per_explicit_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -991,7 +991,7 @@ def test_search_and_crawl_can_convert_documents_per_explicit_url(
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="guide pdf",
             urls=[{"url": pdf_url, "convert_document": True}],
             depth="quick",
@@ -1009,7 +1009,7 @@ def test_search_and_crawl_can_convert_documents_per_explicit_url(
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_does_not_auto_convert_documents(
+def test_search_web_does_not_auto_convert_documents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -1044,7 +1044,7 @@ def test_search_and_crawl_does_not_auto_convert_documents(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="guide pdf",
             depth="quick",
             max_results=1,
@@ -1059,7 +1059,7 @@ def test_search_and_crawl_does_not_auto_convert_documents(
     asyncio.run(scenario())
 
 
-def test_read_page_applies_related_links_limit_and_can_omit_links(
+def test_read_pages_apply_related_links_limit_and_can_omit_links(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -1111,15 +1111,15 @@ def test_read_page_applies_related_links_limit_and_can_omit_links(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        search_results = await tool.search_and_crawl(
+        search_results = await tool.search_web(
             query="primary guide",
             depth="quick",
             max_results=1,
             fresh=True,
         )
         page_id = search_results[0]["page_id"]
-        default_links = await tool.read_page(page_id, related_links_limit=3)
-        no_links = await tool.read_page(page_id, related_links_limit=0)
+        default_links = await tool.read_pages(page_id, related_links_limit=3)
+        no_links = await tool.read_pages(page_id, related_links_limit=0)
 
         assert "related_links" not in search_results[0], search_results[0]
         assert search_results[0]["images"] == images, search_results[0]
@@ -1134,7 +1134,7 @@ def test_read_page_applies_related_links_limit_and_can_omit_links(
     asyncio.run(scenario())
 
 
-def test_read_page_reuses_content_from_initial_crawl(
+def test_read_pages_reuse_content_from_initial_crawl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -1170,7 +1170,7 @@ def test_read_page_reuses_content_from_initial_crawl(
                         tool,
                         search_url,
                         "useEffect - React",
-                        "# useEffect\n\nFull page content saved during search_and_crawl.",
+                        "# useEffect\n\nFull page content saved during search_web.",
                         query or "",
                     )
                 ],
@@ -1180,7 +1180,7 @@ def test_read_page_reuses_content_from_initial_crawl(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -1188,13 +1188,12 @@ def test_read_page_reuses_content_from_initial_crawl(
         )
         page_id = results[0]["page_id"]
 
-        pages = await tool.read_page([page_id], max_chars=500)
+        pages = await tool.read_pages([page_id], max_chars=500)
 
         assert crawl_calls == [[search_url]], crawl_calls
         assert pages["returned_pages"] == 1, pages
         assert (
-            "Full page content saved during search_and_crawl."
-            in pages["pages"][0]["content"]
+            "Full page content saved during search_web." in pages["pages"][0]["content"]
         ), pages
         assert pages["pages"][0]["content_source"] == "crawled_page", pages
         assert pages["pages"][0]["full_content_available"] is True, pages
@@ -1210,9 +1209,7 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
                 "crawl": {"failed": 1},
             }
 
-        async def search_and_crawl(
-            self, *args: Any, **kwargs: Any
-        ) -> list[dict[str, Any]]:
+        async def search_web(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
             _ = args, kwargs
             return [
                 {
@@ -1224,7 +1221,7 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
                 }
             ]
 
-        async def read_page(self, *args: Any, **kwargs: Any) -> None:
+        async def read_pages(self, *args: Any, **kwargs: Any) -> None:
             _ = args, kwargs
             return None
 
@@ -1251,9 +1248,7 @@ def test_cli_parses_json_url_objects_and_read_related_links_limit(
     class FakeTool:
         last_query_metadata: dict[str, Any] = {}
 
-        async def search_and_crawl(
-            self, *args: Any, **kwargs: Any
-        ) -> list[dict[str, Any]]:
+        async def search_web(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
             _ = args
             captured_search_kwargs.update(kwargs)
             return [
@@ -1266,7 +1261,7 @@ def test_cli_parses_json_url_objects_and_read_related_links_limit(
                 }
             ]
 
-        async def read_page(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        async def read_pages(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
             captured_read_kwargs["args"] = args
             captured_read_kwargs["kwargs"] = kwargs
             return {"page_id": "page123", "content": "Guide content"}
@@ -1304,7 +1299,7 @@ def test_cli_parses_json_url_objects_and_read_related_links_limit(
 
 
 @pytest.mark.integration
-def test_run_tool_call_batches_read_page_results() -> None:
+def test_run_tool_call_batches_read_pages_results() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -1326,10 +1321,10 @@ def test_run_tool_call_batches_read_page_results() -> None:
 
     payload = json.loads(result.stdout)
 
-    assert isinstance(payload.get("search_and_crawl"), list), payload
-    assert len(payload["search_and_crawl"]) == 2, payload
+    assert isinstance(payload.get("search_web"), list), payload
+    assert len(payload["search_web"]) == 2, payload
 
-    batched_read = payload.get("read_page")
+    batched_read = payload.get("read_pages")
     assert isinstance(batched_read, dict), payload
     assert batched_read["returned_pages"] == 2, batched_read
     assert len(batched_read["requested_page_ids"]) == 2, batched_read
@@ -1337,7 +1332,7 @@ def test_run_tool_call_batches_read_page_results() -> None:
     assert not batched_read["errors"], batched_read
 
 
-def test_search_and_crawl_honors_requested_max_results_above_default(
+def test_search_web_honors_requested_max_results_above_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -1387,7 +1382,7 @@ def test_search_and_crawl_honors_requested_max_results_above_default(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_and_crawl(
+        results = await tool.search_web(
             query="free gold price api no key historical data",
             depth="normal",
             max_results=8,
