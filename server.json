@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.mrnaqa/sourceweave-web-search",
+  "name": "io.github.MRNAQA/sourceweave-web-search",
   "description": "MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis.",
   "title": "SourceWeave Web Search",
   "websiteUrl": "https://github.com/MRNAQA/sourceweave-web-search",

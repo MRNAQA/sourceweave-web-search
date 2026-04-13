@@ -86,7 +86,7 @@ def test_release_metadata_is_in_sync() -> None:
     assert 'org.opencontainers.image.title="sourceweave-web-search-mcp"' in dockerfile
     assert f'org.opencontainers.image.version="{version}"' in dockerfile
     assert (
-        'io.modelcontextprotocol.server.name="io.github.mrnaqa/sourceweave-web-search"'
+        'io.modelcontextprotocol.server.name="io.github.MRNAQA/sourceweave-web-search"'
         in dockerfile
     )
 

@@ -1,6 +1,6 @@
 # SourceWeave Web Search
 
-<!-- mcp-name: io.github.mrnaqa/sourceweave-web-search -->
+<!-- mcp-name: io.github.MRNAQA/sourceweave-web-search -->
 
 SourceWeave Web Search is an MCP server and CLI for web search plus follow-up page reading.
 

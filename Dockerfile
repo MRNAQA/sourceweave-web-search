@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-LABEL io.modelcontextprotocol.server.name="io.github.mrnaqa/sourceweave-web-search" \
+LABEL io.modelcontextprotocol.server.name="io.github.MRNAQA/sourceweave-web-search" \
       org.opencontainers.image.title="sourceweave-web-search-mcp" \
       org.opencontainers.image.description="MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis" \
       org.opencontainers.image.source="https://github.com/MRNAQA/sourceweave-web-search" \

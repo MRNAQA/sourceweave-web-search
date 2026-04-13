@@ -213,7 +213,7 @@ Requires:
 
 Registry server name:
 
-- `io.github.mrnaqa/sourceweave-web-search`
+- `io.github.MRNAQA/sourceweave-web-search`
 
 Publish only after PyPI and GHCR artifacts are live.
 
