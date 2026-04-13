@@ -21,6 +21,21 @@ on:
         required: true
         default: false
         type: boolean
+      publish_pypi:
+        description: "Publish the built wheel and sdist to PyPI using trusted publishing."
+        required: true
+        default: false
+        type: boolean
+      publish_ghcr:
+        description: "Publish the container image to GitHub Container Registry."
+        required: true
+        default: false
+        type: boolean
+      publish_dockerhub:
+        description: "Publish the container image to Docker Hub. Requires Docker Hub secrets."
+        required: true
+        default: false
+        type: boolean
       changelog:
         description: "Markdown release notes/changelog for this release."
         required: true
@@ -28,6 +43,8 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
 
 concurrency:
   group: release-${{ inputs.tag }}
@@ -90,6 +107,101 @@ jobs:
       - name: Build release distributions
         run: uv build --no-sources --sdist --wheel --out-dir dist/release --clear --no-create-gitignore
 
+      - name: Smoke build Docker image
+        if: ${{ inputs.publish_ghcr || inputs.publish_dockerhub }}
+        run: docker build -t sourceweave-web-search:release .
+
+      - name: Derive release metadata
+        id: release_meta
+        shell: bash
+        env:
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ inputs.tag }}"
+          VERSION="${TAG_NAME#v}"
+          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sourceweave-web-search"
+          DOCKERHUB_IMAGE="$DOCKERHUB_REPOSITORY"
+          if [ -z "$DOCKERHUB_IMAGE" ]; then
+            DOCKERHUB_IMAGE="mrnaqa/sourceweave-web-search"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_image=$DOCKERHUB_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish package to PyPI
+        if: ${{ inputs.publish_pypi }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release
+          skip-existing: true
+
+      - name: Set up Docker Buildx
+        if: ${{ inputs.publish_ghcr || inputs.publish_dockerhub }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ inputs.publish_ghcr }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Docker Hub credentials
+        if: ${{ inputs.publish_dockerhub }}
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+
+      - name: Log in to Docker Hub
+        if: ${{ inputs.publish_dockerhub }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute container tags
+        if: ${{ inputs.publish_ghcr || inputs.publish_dockerhub }}
+        id: container_tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAGS=()
+          if [ "${{ inputs.publish_ghcr }}" = "true" ]; then
+            TAGS+=("${{ steps.release_meta.outputs.ghcr_image }}:${{ steps.release_meta.outputs.version }}")
+            TAGS+=("${{ steps.release_meta.outputs.ghcr_image }}:latest")
+          fi
+          if [ "${{ inputs.publish_dockerhub }}" = "true" ]; then
+            TAGS+=("${{ steps.release_meta.outputs.dockerhub_image }}:${{ steps.release_meta.outputs.version }}")
+            TAGS+=("${{ steps.release_meta.outputs.dockerhub_image }}:latest")
+          fi
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${TAGS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish container image
+        if: ${{ inputs.publish_ghcr || inputs.publish_dockerhub }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.container_tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=sourceweave-web-search
+            org.opencontainers.image.description=MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release_meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
       - name: Generate release checksums
         shell: bash
         run: |
@@ -115,14 +227,25 @@ jobs:
           if [ -z "$TITLE" ]; then
             TITLE="$TAG_NAME"
           fi
-          EXTRA_ARGS=()
+          RELEASE_ARGS=()
           if [ "$PRERELEASE" = "true" ]; then
-            EXTRA_ARGS+=(--prerelease)
+            RELEASE_ARGS+=(--prerelease)
           fi
-          gh release create "$TAG_NAME" \
-            --target "$TARGET_REF" \
-            --title "$TITLE" \
-            --notes-file RELEASE_NOTES.md \
-            "${EXTRA_ARGS[@]}" \
-            artifacts/sourceweave_web_search.py \
-            dist/release/*
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --title "$TITLE" \
+              --notes-file RELEASE_NOTES.md \
+              "${RELEASE_ARGS[@]}"
+            gh release upload "$TAG_NAME" \
+              --clobber \
+              artifacts/sourceweave_web_search.py \
+              dist/release/*
+          else
+            gh release create "$TAG_NAME" \
+              --target "$TARGET_REF" \
+              --title "$TITLE" \
+              --notes-file RELEASE_NOTES.md \
+              "${RELEASE_ARGS[@]}" \
+              artifacts/sourceweave_web_search.py \
+              dist/release/*
+          fi

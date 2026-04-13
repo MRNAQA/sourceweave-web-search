@@ -5,7 +5,10 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - ".github/workflows/release-gate.yml"
+      - ".dockerignore"
       - ".env.example"
+      - "CONTRIBUTING.md"
+      - "Dockerfile"
       - ".gitignore"
       - "LICENSE"
       - "README.md"
@@ -28,7 +31,10 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - ".github/workflows/release-gate.yml"
+      - ".dockerignore"
       - ".env.example"
+      - "CONTRIBUTING.md"
+      - "Dockerfile"
       - ".gitignore"
       - "LICENSE"
       - "README.md"
@@ -85,6 +91,9 @@ jobs:
 
       - name: Build publishable distributions
         run: uv build --no-sources --sdist --wheel --out-dir dist/release-gate --clear --no-create-gitignore
+
+      - name: Smoke build Docker image
+        run: docker build -t sourceweave-web-search:release-gate .
 
       - name: Smoke install built wheel
         shell: bash

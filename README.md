@@ -2,20 +2,21 @@
 
 SourceWeave Web Search is an MCP server and CLI for web search plus follow-up page reading.
 
-It is built around a simple two-step workflow:
-
-- `search_web`: find relevant sources and return compact summaries plus `page_id` handles
-- `read_pages`: read one or more returned pages in full, with optional focused extraction and related links
-
 It uses SearXNG for search, Crawl4AI for HTML extraction, and Redis or Valkey for caching.
+
+For most users, the setup is simple:
+
+1. run the supporting services locally in containers, or point at existing external endpoints
+2. start the MCP server with `uvx`
+3. connect your MCP client to the running server over `stdio` or local HTTP
 
 ## Key Features
 
 - MCP server with `stdio`, `sse`, and `streamable-http` transports
-- two-step workflow that keeps discovery lean and full-page reads explicit
+- lean search plus follow-up page reading for MCP clients
 - explicit per-URL document conversion for PDFs and other supported documents
 - focused reads, related-link limits, image metadata, and page-quality hints
-- installable package, Docker image, and generated OpenWebUI artifact
+- publishable Python package, container image, and generated OpenWebUI artifact
 - compatible with OpenCode, VS Code Copilot, and other MCP clients
 
 ## Requirements
@@ -29,22 +30,86 @@ Optional:
 
 - Docker and Docker Compose for the repo-local stack
 
-## Getting Started
+## Recommended Local Deployment
 
-### Install from PyPI
+Start the supporting services locally:
+
+```bash
+git clone https://github.com/MRNAQA/sourceweave-web-search.git
+cd sourceweave-web-search
+cp .env.example .env
+docker compose up -d redis crawl4ai searxng
+```
+
+Then start the MCP server from the published package with `uvx` and point it at those local endpoints:
+
+```bash
+SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://127.0.0.1:19080/search?format=json&q=<query>" \
+SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://127.0.0.1:19235" \
+SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://127.0.0.1:16379/2" \
+uvx --from sourceweave-web-search sourceweave-search-mcp
+```
+
+For a local HTTP MCP endpoint instead of `stdio`:
+
+```bash
+SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://127.0.0.1:19080/search?format=json&q=<query>" \
+SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://127.0.0.1:19235" \
+SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://127.0.0.1:16379/2" \
+uvx --from sourceweave-web-search sourceweave-search-mcp \
+  --transport streamable-http \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+You can also point the same `uvx` command at externally hosted SearXNG, Crawl4AI, and Redis or Valkey endpoints by changing the environment variables.
+
+## Installation Options
+
+### Python package
+
+Published releases can be installed from PyPI:
 
 ```bash
 pip install sourceweave-web-search
 ```
 
-Or run it without a global install:
+Or run directly without a global install:
 
 ```bash
 uvx --from sourceweave-web-search sourceweave-search-mcp
 uvx --from sourceweave-web-search sourceweave-search --query "python programming"
 ```
 
-### Configure runtime services
+### Repo checkout
+
+For local development or source-based runs:
+
+```bash
+git clone https://github.com/MRNAQA/sourceweave-web-search.git
+cd sourceweave-web-search
+uv sync --locked --group dev
+uv run sourceweave-search-mcp
+```
+
+### Container image
+
+The release workflow can publish a container image to:
+
+- `ghcr.io/mrnaqa/sourceweave-web-search`
+- optionally `docker.io/mrnaqa/sourceweave-web-search` when Docker Hub publishing is configured
+
+Example runtime:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://host.docker.internal:19080/search?format=json&q=<query>" \
+  -e SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://host.docker.internal:19235" \
+  -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
+  ghcr.io/mrnaqa/sourceweave-web-search:latest
+```
+
+## Runtime Configuration
 
 Set these environment variables:
 
@@ -67,7 +132,7 @@ sourceweave-search --query "python programming" --read-first-pages 2
 
 ## Quick Start
 
-### CLI
+The CLI is useful for smoke testing the runtime outside an MCP client.
 
 Search and immediately read the first results:
 
@@ -92,7 +157,7 @@ sourceweave-search \
   --url '{"url": "https://example.com/guide.pdf", "convert_document": true}'
 ```
 
-### MCP server
+## MCP Server
 
 Run over stdio:
 
@@ -106,34 +171,14 @@ Run as a local HTTP endpoint:
 sourceweave-search-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
-## Tools
+## What MCP Clients Get
 
-### `search_web`
+MCP clients receive a simple two-step flow:
 
-Use `search_web` to discover sources and get compact summaries plus `page_id` handles.
+- a search step that returns compact results plus `page_id` handles
+- a follow-up page-read step that returns stored content, focused excerpts, related-link summaries, image metadata, and page-quality hints when relevant
 
-Inputs:
-
-- `query`: concise retrieval-style query; quote exact errors and use `site:` when domain preference matters
-- `urls`: optional specific URLs to crawl in addition to search results; each item may be a string or `{ "url": "...", "convert_document": true }`
-- `depth`: `quick`, `normal`, or `deep`
-- `max_results`: optional result cap
-- `fresh`: bypass cached search and page results for that call
-
-Returns compact records including fields such as `page_id`, `summary`, `key_points`, `content_type`, `content_source`, `source_type`, `full_content_available`, optional `images`, and optional `page_quality` when a page looks blocked or challenge-like.
-
-### `read_pages`
-
-Use `read_pages` after `search_web` when you want the stored content for one or more `page_id` values.
-
-Inputs:
-
-- `page_ids`: one or more page IDs returned by `search_web`
-- `focus`: optional phrase for focused extraction
-- `related_links_limit`: maximum related links per page; use `0` to omit the `related_links` array while keeping totals and hints
-- `max_chars`: maximum returned characters per page
-
-Returns batched page content with fields such as `content`, `focus_applied`, `truncated`, `related_links_total`, `related_links_more_available`, optional `related_links`, optional `images`, and optional `page_quality`.
+Human operators usually only need to know how to run the server and where to point the runtime endpoints. MCP clients handle the exact tool parameters.
 
 ## MCP Client Setup
 
@@ -219,29 +264,17 @@ For a shared HTTP endpoint instead:
 }
 ```
 
-## Deployment Options
+## Publishing
 
-### Docker image
+The manual release workflow at `.github/workflows/release.yml` accepts a changelog and can optionally:
 
-```bash
-docker build -t sourceweave-web-search .
-docker run --rm -p 18000:8000 \
-  -e SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://host.docker.internal:19080/search?format=json&q=<query>" \
-  -e SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://host.docker.internal:19235" \
-  -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
-  sourceweave-web-search
-```
+- publish the wheel and sdist to PyPI
+- publish the container image to GHCR
+- mirror the container image to Docker Hub when Docker Hub credentials are configured
 
-### Repo-local Compose stack
+Releases always attach the built distributions and `artifacts/sourceweave_web_search.py` to the GitHub release.
 
-```bash
-git clone https://github.com/MRNAQA/sourceweave-web-search.git
-cd sourceweave-web-search
-cp .env.example .env
-docker compose up -d mcp
-```
-
-That starts the MCP server plus SearXNG, Crawl4AI, and Redis. The HTTP MCP endpoint is exposed at `http://localhost:18000/mcp`.
+For contributor setup and publishing requirements, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## OpenWebUI
 
@@ -268,7 +301,7 @@ Default repo-local ports:
 - SearXNG: `19080`
 - Crawl4AI: `19235`
 - Redis: `16379`
-- MCP: `18000` at `/mcp`
+- MCP: `8000` when run directly with `uvx`; `18000` at `/mcp` when using the repo's `mcp` compose service
 
 ## Contributing
 

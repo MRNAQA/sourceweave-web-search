@@ -8,10 +8,25 @@ cd sourceweave-web-search
 uv sync --locked --group dev
 ```
 
-Optional repo-local runtime stack:
+Recommended repo-local runtime stack:
 
 ```bash
 cp .env.example .env
+docker compose up -d redis crawl4ai searxng
+```
+
+Then run the MCP server locally against those endpoints:
+
+```bash
+SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://127.0.0.1:19080/search?format=json&q=<query>" \
+SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://127.0.0.1:19235" \
+SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://127.0.0.1:16379/2" \
+uv run sourceweave-search-mcp
+```
+
+Optional fully containerized repo-local stack:
+
+```bash
 docker compose up -d mcp
 ```
 
@@ -87,15 +102,26 @@ Inputs:
 - `release_name`: optional GitHub release title
 - `target_ref`: branch or commit to release, usually `main`
 - `prerelease`: whether to mark the release as a prerelease
+- `publish_pypi`: publish the built wheel and sdist to PyPI using trusted publishing
+- `publish_ghcr`: publish the container image to GitHub Container Registry
+- `publish_dockerhub`: publish the container image to Docker Hub
 - `changelog`: markdown release notes for the GitHub release body
 
 The workflow:
 
 - verifies the tag matches `pyproject.toml` version
 - reruns artifact, lint, type, and deterministic test checks
+- smoke builds the Docker image
 - builds the wheel and sdist
+- optionally publishes the package to PyPI
+- optionally publishes the container image to GHCR and Docker Hub
 - generates `SHA256SUMS.txt`
 - creates a GitHub release with the built distributions and `artifacts/sourceweave_web_search.py` attached
+
+External setup required before enabling publishing:
+
+- PyPI: configure trusted publishing for the `sourceweave-web-search` project to allow this GitHub workflow to publish
+- Docker Hub: add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets, and optionally set `DOCKERHUB_REPOSITORY` as a repository variable if you do not want the default `mrnaqa/sourceweave-web-search`
 
 Example trigger from the CLI:
 
@@ -105,5 +131,8 @@ gh workflow run release.yml \
   -f tag=v0.2.0 \
   -f target_ref=main \
   -f prerelease=false \
+  -f publish_pypi=true \
+  -f publish_ghcr=true \
+  -f publish_dockerhub=false \
   -f changelog="$(cat CHANGELOG.md)"
 ```
