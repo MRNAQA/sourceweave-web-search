@@ -99,7 +99,6 @@ uv run sourceweave-search-mcp
 The release workflow can publish a container image to:
 
 - `ghcr.io/mrnaqa/sourceweave-web-search`
-- optionally `docker.io/mrnaqa/sourceweave-web-search` when Docker Hub publishing is configured
 
 Example runtime:
 
@@ -110,6 +109,38 @@ docker run --rm -p 8000:8000 \
   -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
   ghcr.io/mrnaqa/sourceweave-web-search:latest
 ```
+
+Example `docker compose` recipe:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+
+  crawl4ai:
+    image: unclecode/crawl4ai:basic-amd64
+
+  searxng:
+    image: searxng/searxng:latest
+
+  sourceweave:
+    image: ghcr.io/mrnaqa/sourceweave-web-search:latest
+    depends_on:
+      - redis
+      - crawl4ai
+      - searxng
+    environment:
+      SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL: http://searxng:8080/search?format=json&q=<query>
+      SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL: http://crawl4ai:11235
+      SOURCEWEAVE_SEARCH_CACHE_REDIS_URL: redis://redis:6379/2
+      FASTMCP_HOST: 0.0.0.0
+      FASTMCP_PORT: 8000
+    ports:
+      - "8000:8000"
+```
+
+That gives you a local HTTP MCP endpoint at `http://127.0.0.1:8000/mcp` with the SourceWeave container linked to the supporting services by container name.
 
 ## Runtime Configuration
 
@@ -151,6 +182,14 @@ sourceweave-search \
   --related-links-limit 3
 ```
 
+Read a direct URL without running `search_web` first:
+
+```bash
+sourceweave-search \
+  --read-url "https://packaging.python.org/en/latest/" \
+  --max-chars 2000
+```
+
 Force document conversion for an explicit URL:
 
 ```bash
@@ -178,7 +217,7 @@ sourceweave-search-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 MCP clients receive a simple two-step flow:
 
 - a search step that returns compact results plus `page_id` handles
-- a follow-up page-read step that returns stored content, focused excerpts, related-link summaries, image metadata, and page-quality hints when relevant
+- a follow-up page-read step that can read by `page_id` or direct URL and returns stored content, focused excerpts, related-link summaries, image metadata, and page-quality hints when relevant
 
 Human operators usually only need to know how to run the server and where to point the runtime endpoints. MCP clients handle the exact tool parameters.
 
@@ -266,18 +305,6 @@ For a shared HTTP endpoint instead:
 }
 ```
 
-## Publishing
-
-The manual release workflow at `.github/workflows/release.yml` accepts a changelog and can optionally:
-
-- publish the wheel and sdist to PyPI
-- publish the container image to GHCR
-- mirror the container image to Docker Hub when Docker Hub credentials are configured
-
-Releases always attach the built distributions and `artifacts/sourceweave_web_search.py` to the GitHub release.
-
-For contributor setup and publishing requirements, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
 ## OpenWebUI
 
 This repo also ships a generated standalone OpenWebUI tool file at `artifacts/sourceweave_web_search.py`.
@@ -304,11 +331,3 @@ Default repo-local ports:
 - Crawl4AI: `19235`
 - Redis: `16379`
 - MCP: `8000` when run directly with `uvx`; `18000` at `/mcp` when using the repo's `mcp` compose service
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for local development, verification, packaging notes, and release workflow details.
-
-## License
-
-This project is licensed under the MIT License. See [`LICENSE`](LICENSE).
