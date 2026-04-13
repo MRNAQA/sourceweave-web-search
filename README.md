@@ -1,5 +1,7 @@
 # SourceWeave Web Search
 
+<!-- mcp-name: io.github.mrnaqa/sourceweave-web-search -->
+
 SourceWeave Web Search is an MCP server and CLI for web search plus follow-up page reading.
 
 It uses SearXNG for search, Crawl4AI for HTML extraction, and Redis or Valkey for caching.

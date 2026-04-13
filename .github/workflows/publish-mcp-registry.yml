@@ -1,0 +1,56 @@
+name: publish-mcp-registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Branch or commit to publish registry metadata from. Usually main."
+        required: true
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.ref }}
+
+      - name: Verify server.json version matches pyproject.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
+
+          project_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          server_version = json.loads(Path("server.json").read_text())["version"]
+
+          if project_version != server_version:
+              raise SystemExit(
+                  f"server.json version {server_version!r} does not match pyproject.toml version {project_version!r}"
+              )
+          PY
+
+      - name: Install mcp-publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_${OS}_${ARCH}.tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry with GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server metadata to MCP Registry
+        run: ./mcp-publisher publish

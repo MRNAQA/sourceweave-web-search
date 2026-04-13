@@ -206,7 +206,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum artifacts/sourceweave_web_search.py dist/release/* > dist/release/SHA256SUMS.txt
+          sha256sum artifacts/sourceweave_web_search.py server.json dist/release/* > dist/release/SHA256SUMS.txt
 
       - name: Write release notes
         env:
@@ -239,6 +239,7 @@ jobs:
             gh release upload "$TAG_NAME" \
               --clobber \
               artifacts/sourceweave_web_search.py \
+              server.json \
               dist/release/*
           else
             gh release create "$TAG_NAME" \
@@ -247,5 +248,6 @@ jobs:
               --notes-file RELEASE_NOTES.md \
               "${RELEASE_ARGS[@]}" \
               artifacts/sourceweave_web_search.py \
+              server.json \
               dist/release/*
           fi

@@ -1,5 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
+LABEL io.modelcontextprotocol.server.name="io.github.mrnaqa/sourceweave-web-search"
+
 WORKDIR /app
 
 ENV HOME=/tmp \

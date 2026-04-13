@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - ".github/workflows/publish-mcp-registry.yml"
       - ".github/workflows/release-gate.yml"
       - ".dockerignore"
       - ".env.example"
@@ -12,6 +13,7 @@ on:
       - ".gitignore"
       - "LICENSE"
       - "README.md"
+      - "server.json"
       - "docker-compose.yml"
       - "infrastructure/**"
       - "pyproject.toml"
@@ -30,6 +32,7 @@ on:
       - main
     paths:
       - ".github/workflows/release.yml"
+      - ".github/workflows/publish-mcp-registry.yml"
       - ".github/workflows/release-gate.yml"
       - ".dockerignore"
       - ".env.example"
@@ -38,6 +41,7 @@ on:
       - ".gitignore"
       - "LICENSE"
       - "README.md"
+      - "server.json"
       - "docker-compose.yml"
       - "infrastructure/**"
       - "pyproject.toml"

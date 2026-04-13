@@ -1,0 +1,104 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mrnaqa/sourceweave-web-search",
+  "description": "MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis.",
+  "title": "SourceWeave Web Search",
+  "websiteUrl": "https://github.com/MRNAQA/sourceweave-web-search",
+  "repository": {
+    "url": "https://github.com/MRNAQA/sourceweave-web-search",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "sourceweave-web-search",
+      "version": "0.2.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL",
+          "description": "SearXNG URL template. Must contain <query>.",
+          "isRequired": true
+        },
+        {
+          "name": "SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL",
+          "description": "Base URL for the Crawl4AI service.",
+          "isRequired": true
+        },
+        {
+          "name": "SOURCEWEAVE_SEARCH_CACHE_REDIS_URL",
+          "description": "Redis or Valkey URL used for caching.",
+          "isRequired": true
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/mrnaqa/sourceweave-web-search:0.2.0",
+      "runtimeHint": "docker",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:{port}/mcp"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "-p",
+          "value": "{port}:8000",
+          "description": "Map the local MCP HTTP port to the container.",
+          "variables": {
+            "port": {
+              "description": "Local port to expose the MCP server on.",
+              "default": "8000",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-e",
+          "value": "SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL={searxng_url}",
+          "description": "SearXNG URL template. Must contain <query>.",
+          "isRepeated": true,
+          "variables": {
+            "searxng_url": {
+              "description": "Full SearXNG URL template used by SourceWeave.",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-e",
+          "value": "SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL={crawl4ai_url}",
+          "description": "Base URL for the Crawl4AI service.",
+          "isRepeated": true,
+          "variables": {
+            "crawl4ai_url": {
+              "description": "Base URL for the Crawl4AI service.",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-e",
+          "value": "SOURCEWEAVE_SEARCH_CACHE_REDIS_URL={redis_url}",
+          "description": "Redis or Valkey URL used for caching.",
+          "isRepeated": true,
+          "variables": {
+            "redis_url": {
+              "description": "Redis or Valkey URL used for caching.",
+              "isRequired": true
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
