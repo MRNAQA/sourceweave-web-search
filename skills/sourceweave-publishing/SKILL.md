@@ -24,10 +24,16 @@ Publish SourceWeave with the least surprising flow:
 
 Treat `pyproject.toml` as the release version source of truth.
 
-Derived files are synchronized by:
+Use this as the canonical release-metadata sync command:
 
 ```bash
 uv run python scripts/sync_release_metadata.py
+```
+
+The packaged script entry point is an equivalent alternative when that is more convenient:
+
+```bash
+uv run sourceweave-sync-release-metadata
 ```
 
 The sync/check path covers:
@@ -38,6 +44,35 @@ The sync/check path covers:
 - Dockerfile OCI version label
 
 Do not hand-edit those version fields unless the user explicitly asks for a one-off repair.
+
+The sync script does not cover every literal version occurrence in the repo.
+
+It does not update:
+
+- `artifacts/sourceweave_web_search.py`
+- `CHANGELOG.md`
+- skill docs, eval fixtures, or other prose that may mention old release numbers
+
+The generated OpenWebUI artifact is a separate derived surface. Keep it aligned with:
+
+```bash
+uv run sourceweave-build-openwebui
+uv run sourceweave-build-openwebui --check
+```
+
+For release work, treat the combined version-alignment flow as:
+
+```bash
+uv run python scripts/sync_release_metadata.py
+uv run sourceweave-build-openwebui
+```
+
+And the combined verification flow as:
+
+```bash
+uv run python scripts/sync_release_metadata.py --check
+uv run sourceweave-build-openwebui --check
+```
 
 ## Canonical Release Surfaces
 
@@ -73,6 +108,8 @@ uv run ruff check src tests
 uv run mypy
 uv build --no-sources --sdist --wheel --out-dir dist/release-check --clear --no-create-gitignore
 ```
+
+If the user asks whether the sync script covers "all occurrences," answer precisely: no. It covers the intended release metadata surfaces, while the OpenWebUI artifact has its own build/check path and changelog text is still maintained separately.
 
 If the container story changed, also verify the local MCP image path:
 
@@ -115,9 +152,18 @@ Important inputs:
 Recommended default invocation:
 
 ```bash
+VERSION=$(python - <<'PY'
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path("pyproject.toml").read_text())
+print(data["project"]["version"])
+PY
+)
+
 gh workflow run release.yml \
   --ref main \
-  -f tag=vX.Y.Z \
+  -f tag="v${VERSION}" \
   -f target_ref=main \
   -f prerelease=false \
   -f publish_pypi=true \
@@ -186,19 +232,46 @@ gh workflow run publish-mcp-registry.yml --ref main -f target_ref=main
 Confirm the release itself:
 
 ```bash
-gh release view vX.Y.Z --json url,tagName,name,isPrerelease,assets
+VERSION=$(python - <<'PY'
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path("pyproject.toml").read_text())
+print(data["project"]["version"])
+PY
+)
+
+gh release view "v${VERSION}" --json url,tagName,name,isPrerelease,assets
 ```
 
 Confirm the PyPI package is installable:
 
 ```bash
-uvx --from sourceweave-web-search==X.Y.Z sourceweave-search --help
+VERSION=$(python - <<'PY'
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path("pyproject.toml").read_text())
+print(data["project"]["version"])
+PY
+)
+
+uvx --from "sourceweave-web-search==${VERSION}" sourceweave-search --help
 ```
 
 Confirm GHCR image exists:
 
 ```bash
-docker manifest inspect ghcr.io/mrnaqa/sourceweave-web-search-mcp:X.Y.Z
+VERSION=$(python - <<'PY'
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path("pyproject.toml").read_text())
+print(data["project"]["version"])
+PY
+)
+
+docker manifest inspect "ghcr.io/mrnaqa/sourceweave-web-search-mcp:${VERSION}"
 ```
 
 If the user wants extra confidence, also confirm `latest` is updated when that tag was published.
@@ -238,7 +311,7 @@ Keep it operational and specific. The user should be able to tell at a glance wh
 ## Examples
 
 **Example 1:**
-Input: `bump to 0.2.2, update the changelog, and publish to pypi and ghcr`
+Input: `bump the version, update the changelog, and publish to pypi and ghcr`
 Output: bump `pyproject.toml`, run metadata sync, update `CHANGELOG.md`, run verification, trigger `release.yml` with `publish_pypi=true` and `publish_ghcr=true`, verify PyPI install and GHCR manifest, then recommend running MCP Registry publish.
 
 **Example 2:**
