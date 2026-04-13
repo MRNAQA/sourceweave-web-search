@@ -24,6 +24,15 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import http.client, sys; c = http.client.HTTPConnection('localhost', 8000, timeout=5); c.request('GET', '/mcp', headers={'Accept': 'text/event-stream'}); r = c.getresponse(); sys.exit(0 if r.status in (200, 400, 406) else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     ports:
       - "18000:8000"
     restart: unless-stopped
