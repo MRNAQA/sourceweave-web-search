@@ -50,6 +50,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Read one or more page_ids. Repeat this flag to batch them into a single read_pages call.",
     )
+    parser.add_argument(
+        "--read-url",
+        dest="read_urls",
+        action="append",
+        default=[],
+        help=(
+            "Read one or more direct URLs without running search_web first. Repeatable. "
+            "May be a plain URL string or a JSON object like "
+            '\'{"url": "https://example.com/file.pdf", "convert_document": true}\'.'
+        ),
+    )
     parser.add_argument("--focus", default="")
     parser.add_argument("--max-chars", type=int, default=1200)
     parser.add_argument("--pretty", action="store_true")
@@ -87,9 +98,11 @@ def _page_ids_from_results(results: Any, count: int) -> list[str]:
     ]
 
 
-def _urls_from_args(args: argparse.Namespace) -> list[Any] | None:
+def _targets_from_raw_args(
+    raw_values: Sequence[str], flag_name: str
+) -> list[Any] | None:
     normalized_urls: list[Any] = []
-    for raw_value in args.urls:
+    for raw_value in raw_values:
         value = str(raw_value or "").strip()
         if not value:
             continue
@@ -97,15 +110,23 @@ def _urls_from_args(args: argparse.Namespace) -> list[Any] | None:
             try:
                 parsed = json.loads(value)
             except json.JSONDecodeError as exc:
-                raise SystemExit(f"Invalid JSON passed to --url: {exc}") from exc
+                raise SystemExit(f"Invalid JSON passed to {flag_name}: {exc}") from exc
             if not isinstance(parsed, dict) or not parsed.get("url"):
                 raise SystemExit(
-                    "JSON passed to --url must be an object with at least a 'url' field"
+                    f"JSON passed to {flag_name} must be an object with at least a 'url' field"
                 )
             normalized_urls.append(parsed)
             continue
         normalized_urls.append(value)
     return normalized_urls or None
+
+
+def _urls_from_args(args: argparse.Namespace) -> list[Any] | None:
+    return _targets_from_raw_args(args.urls, "--url")
+
+
+def _read_urls_from_args(args: argparse.Namespace) -> list[Any] | None:
+    return _targets_from_raw_args(args.read_urls, "--read-url")
 
 
 def _valve_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -119,15 +140,17 @@ def _valve_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
 async def _read_pages(
     tool: Any,
     page_ids: list[str],
+    urls: list[Any] | None,
     focus: str,
     related_links_limit: int,
     max_chars: int,
 ) -> Any:
-    if not page_ids:
+    if not page_ids and not urls:
         return None
 
     return await tool.read_pages(
-        page_ids[0] if len(page_ids) == 1 else page_ids,
+        page_ids=page_ids[0] if len(page_ids) == 1 else page_ids or None,
+        urls=urls,
         focus=focus,
         related_links_limit=related_links_limit,
         max_chars=max_chars,
@@ -135,8 +158,8 @@ async def _read_pages(
 
 
 async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
-    if not args.query and not args.read_page_ids:
-        raise SystemExit("Provide --query or --read-page-id")
+    if not args.query and not args.read_page_ids and not args.read_urls:
+        raise SystemExit("Provide --query, --read-page-id, or --read-url")
 
     tool = build_tools(valve_overrides=_valve_overrides_from_args(args))
     payload: dict[str, Any] = {}
@@ -158,6 +181,7 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
         read_payload = await _read_pages(
             tool,
             page_ids,
+            None,
             args.focus,
             args.related_links_limit,
             args.max_chars,
@@ -170,6 +194,17 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
         payload["read_pages"] = await _read_pages(
             tool,
             requested_page_ids,
+            None,
+            args.focus,
+            args.related_links_limit,
+            args.max_chars,
+        )
+
+    if args.read_urls:
+        payload["read_pages"] = await _read_pages(
+            tool,
+            [],
+            _read_urls_from_args(args),
             args.focus,
             args.related_links_limit,
             args.max_chars,

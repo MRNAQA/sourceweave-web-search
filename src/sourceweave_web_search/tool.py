@@ -1637,15 +1637,140 @@ class Tools:
             )
         return result
 
+    async def _read_single_url(
+        self,
+        target: Any,
+        focus: str = "",
+        related_links_limit: int = 3,
+        max_chars: int = 8000,
+        __event_emitter__: EventEmitter = None,
+    ) -> dict[str, Any]:
+        normalized_targets = self._normalize_url_targets([target])
+        if not normalized_targets:
+            return {"error": "urls must contain at least one non-empty URL."}
+
+        candidate = normalized_targets[0]
+        url = str(candidate.get("url", "") or "")
+        if not url:
+            return {"error": "urls must contain at least one non-empty URL."}
+
+        cached_record = None
+        try:
+            cached_page = await self._cache.get(self._page_cache_key(url))
+            if cached_page:
+                parsed_record = json.loads(cached_page)
+                if isinstance(
+                    parsed_record, dict
+                ) and self._cached_record_satisfies_candidate(parsed_record, candidate):
+                    page_id = await self._store_page_record(
+                        parsed_record["url"],
+                        parsed_record.get("title", ""),
+                        parsed_record["content"],
+                        content_type=str(
+                            parsed_record.get("content_type", "html") or "html"
+                        ),
+                        source_type="explicit_url",
+                        content_source=str(
+                            parsed_record.get("content_source", "crawled_page")
+                            or "crawled_page"
+                        ),
+                        full_content_available=bool(
+                            parsed_record.get("full_content_available", True)
+                        ),
+                        related_links=(
+                            list(parsed_record.get("related_links", []))
+                            if isinstance(parsed_record.get("related_links"), list)
+                            else []
+                        ),
+                        related_links_total=int(
+                            parsed_record.get("related_links_total", 0) or 0
+                        ),
+                        images=(
+                            list(parsed_record.get("images", []))
+                            if isinstance(parsed_record.get("images"), list)
+                            else []
+                        ),
+                    )
+                    cached_record = await self._load_page_record(page_id)
+                    if cached_record:
+                        return await self._read_single_page(
+                            page_id,
+                            focus=focus,
+                            related_links_limit=related_links_limit,
+                            max_chars=max_chars,
+                            __event_emitter__=__event_emitter__,
+                        )
+        except Exception:
+            cached_record = None
+
+        url_type = self._classify_url(url)
+        if url_type == "skip":
+            return {
+                "url": url,
+                "error": f"URL '{url}' points to a file type that read_pages does not read directly.",
+            }
+
+        if url_type == "document" and not candidate.get("convert_document"):
+            return {
+                "url": url,
+                "error": (
+                    "URL looks like a document. Reissue read_pages with "
+                    "urls=[{'url': '...','convert_document': true}] to convert it."
+                ),
+            }
+
+        if candidate.get("convert_document") and url_type == "document":
+            crawled = await self._fetch_document(
+                url,
+                query=focus,
+                timeout_s=self.valves.DOCUMENT_FETCH_TIMEOUT,
+                __event_emitter__=__event_emitter__,
+            )
+            if not crawled:
+                return {"url": url, "error": f"Failed to read URL '{url}'."}
+            return await self._read_single_page(
+                crawled["page_id"],
+                focus=focus,
+                related_links_limit=related_links_limit,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
+
+        crawled_payload = await self._crawl_url(
+            [url],
+            query=focus or None,
+            timeout_s=self.valves.CRAWL4AI_TIMEOUT,
+            __event_emitter__=__event_emitter__,
+        )
+        if "error" in crawled_payload:
+            return {"url": url, "error": f"Failed to read URL '{url}'."}
+
+        content_items = crawled_payload.get("content", [])
+        if not content_items:
+            return {"url": url, "error": f"Failed to read URL '{url}'."}
+
+        page_id = str(content_items[0].get("page_id", "") or "")
+        if not page_id:
+            return {"url": url, "error": f"Failed to read URL '{url}'."}
+
+        return await self._read_single_page(
+            page_id,
+            focus=focus,
+            related_links_limit=related_links_limit,
+            max_chars=max_chars,
+            __event_emitter__=__event_emitter__,
+        )
+
     async def read_pages(
         self,
-        page_ids: Union[str, List[str]],
+        page_ids: Union[str, List[str], None] = None,
+        urls: Union[str, list[Any], None] = None,
         focus: str = "",
         related_links_limit: int = 3,
         max_chars: int = 8000,
         __event_emitter__: EventEmitter = None,
     ) -> dict:
-        if isinstance(page_ids, str):
+        if isinstance(page_ids, str) and urls is None:
             single_result = await self._read_single_page(
                 page_ids,
                 focus=focus,
@@ -1657,17 +1782,44 @@ class Tools:
                 return {"error": single_result["error"]}
             return single_result
 
+        if isinstance(urls, str) and page_ids is None:
+            single_result = await self._read_single_url(
+                urls,
+                focus=focus,
+                related_links_limit=related_links_limit,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
+            if "error" in single_result:
+                return {"error": single_result["error"]}
+            return single_result
+
         normalized_page_ids = []
         seen_page_ids = set()
-        for page_id in page_ids:
+        for page_id in page_ids or []:
             normalized_page_id = str(page_id).strip()
             if not normalized_page_id or normalized_page_id in seen_page_ids:
                 continue
             seen_page_ids.add(normalized_page_id)
             normalized_page_ids.append(normalized_page_id)
 
-        if not normalized_page_ids:
-            return {"error": "page_ids must contain at least one non-empty page_id."}
+        normalized_url_targets = self._normalize_url_targets(
+            [urls] if isinstance(urls, str) else urls
+        )
+        if not normalized_page_ids and len(normalized_url_targets) == 1:
+            single_result = await self._read_single_url(
+                normalized_url_targets[0],
+                focus=focus,
+                related_links_limit=related_links_limit,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
+            if "error" in single_result:
+                return {"error": single_result["error"]}
+            return single_result
+
+        if not normalized_page_ids and not normalized_url_targets:
+            return {"error": "Provide at least one page_id or URL to read_pages."}
 
         pages = []
         errors = []
@@ -1684,12 +1836,33 @@ class Tools:
                 continue
             pages.append(page_result)
 
-        return {
+        normalized_url_strings: list[str] = []
+        for target in normalized_url_targets:
+            url = str(target.get("url", "") or "")
+            if not url:
+                continue
+            normalized_url_strings.append(url)
+            page_result = await self._read_single_url(
+                target,
+                focus=focus,
+                related_links_limit=related_links_limit,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
+            if "error" in page_result:
+                errors.append({"url": url, "error": page_result["error"]})
+                continue
+            pages.append(page_result)
+
+        response = {
             "pages": pages,
             "errors": errors,
             "requested_page_ids": normalized_page_ids,
             "returned_pages": len(pages),
         }
+        if normalized_url_strings:
+            response["requested_urls"] = normalized_url_strings
+        return response
 
     async def search_web(
         self,

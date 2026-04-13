@@ -61,11 +61,21 @@ SearchFresh = Annotated[
 ]
 
 ReadPageIds = Annotated[
-    list[str],
+    list[str] | None,
     Field(
         description=(
-            "One or more page_ids returned by search_web. Batch related pages into one "
+            "Optional page_ids returned by search_web. Batch related pages into one "
             "call when comparing or synthesizing multiple sources."
+        )
+    ),
+]
+
+ReadUrls = Annotated[
+    list[str | UrlTarget] | None,
+    Field(
+        description=(
+            "Optional direct URLs to read without running search_web first. Each item may be "
+            "either a plain URL string or an object with per-URL options like convert_document."
         )
     ),
 ]
@@ -74,8 +84,9 @@ ReadFocus = Annotated[
     str,
     Field(
         description=(
-            "Optional focus phrase used to extract the most relevant sections from stored page "
-            "content. Use short topic phrases, exact errors, function names, or concepts."
+            "Optional focus phrase used to extract the most relevant sections from page content. "
+            "Leave it empty for a normal cleaned read. Use short topic phrases, exact errors, "
+            "function names, or concepts when you want a focused excerpt."
         )
     ),
 ]
@@ -146,20 +157,22 @@ def build_mcp_server(
     @server.tool(
         name="read_pages",
         description=(
-            "Retrieve the full cleaned content for one or more previously returned page_ids. "
-            "Prefer batching related page_ids in a single call. Use focus to extract the most relevant sections. "
-            "Use related_links_limit=0 when you only want page content without page-adjacent links. "
+            "Retrieve the full cleaned content for one or more pages. You can pass page_ids from search_web "
+            "or direct URLs when you already know what to read. Prefer batching related page_ids or URLs in a single call. "
+            "Leave focus empty for a normal cleaned read. Use related_links_limit=0 when you only want page content without page-adjacent links. "
             "Returned pages may include page_quality when a page looks challenge-like or blocked."
         ),
     )
     async def read_pages(
-        page_ids: ReadPageIds,
+        page_ids: ReadPageIds = None,
+        urls: ReadUrls = None,
         focus: ReadFocus = "",
         related_links_limit: ReadRelatedLinksLimit = 3,
         max_chars: ReadMaxChars = 8000,
     ):
         return await tool_instance.read_pages(
-            page_ids,
+            page_ids=page_ids,
+            urls=urls,
             focus=focus,
             related_links_limit=related_links_limit,
             max_chars=max_chars,

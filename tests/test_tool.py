@@ -169,6 +169,106 @@ def test_read_pages_accepts_multiple_page_ids_in_one_call() -> None:
     asyncio.run(scenario())
 
 
+def test_read_pages_accepts_direct_url_without_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        url = "https://example.com/guide"
+        crawl_calls: list[list[str]] = []
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        "Guide",
+                        "# Guide\n\nDirect URL content.",
+                        query or "",
+                    )
+                ]
+            }
+
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        page = await tool.read_pages(urls=[url], max_chars=500)
+
+        assert page["url"] == url, page
+        assert "error" not in page, page
+        assert crawl_calls == [[url]], crawl_calls
+
+    asyncio.run(scenario())
+
+
+def test_read_pages_accepts_direct_document_url_with_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        pdf_url = "https://example.com/guide.pdf"
+        fetch_calls: list[str] = []
+
+        async def fake_fetch_document(
+            url: str,
+            query: str = "",
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            fetch_calls.append(url)
+            return _make_crawl_result(
+                tool,
+                url,
+                "Guide PDF",
+                "# Guide PDF\n\nConverted document content.",
+                query,
+                content_type="document",
+                content_source="converted_document",
+            )
+
+        monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
+
+        page = await tool.read_pages(
+            urls=[{"url": pdf_url, "convert_document": True}],
+            max_chars=500,
+        )
+
+        assert fetch_calls == [pdf_url], fetch_calls
+        assert page["url"] == pdf_url, page
+        assert page["content_type"] == "document", page
+        assert page["content_source"] == "converted_document", page
+
+    asyncio.run(scenario())
+
+
+def test_read_pages_requires_convert_document_for_direct_document_urls() -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        pdf_url = "https://example.com/guide.pdf"
+
+        page = await tool.read_pages(urls=[pdf_url], max_chars=500)
+
+        assert page == {
+            "error": (
+                "URL looks like a document. Reissue read_pages with "
+                "urls=[{'url': '...','convert_document': true}] to convert it."
+            )
+        }, page
+
+    asyncio.run(scenario())
+
+
 def test_read_pages_multi_returns_partial_errors_for_missing_ids() -> None:
     async def scenario() -> None:
         tool = Tools()
@@ -1235,6 +1335,42 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
         payload = await cli_module.run_cli(args)
         assert payload["search_metadata"]["query"] == "example query", payload
         assert payload["search_metadata"]["crawl"]["failed"] == 1, payload
+
+    asyncio.run(scenario())
+
+
+def test_cli_reads_direct_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_read_kwargs: dict[str, Any] = {}
+
+    class FakeTool:
+        last_query_metadata: dict[str, Any] = {}
+
+        async def read_pages(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            captured_read_kwargs["args"] = args
+            captured_read_kwargs["kwargs"] = kwargs
+            return {"url": "https://packaging.python.org/en/latest/", "content": "ok"}
+
+    async def scenario() -> None:
+        from sourceweave_web_search import cli as cli_module
+
+        monkeypatch.setattr(
+            cli_module, "build_tools", lambda valve_overrides=None: FakeTool()
+        )
+        args = cli_module.parse_args(
+            [
+                "--read-url",
+                "https://packaging.python.org/en/latest/",
+                "--related-links-limit",
+                "1",
+            ]
+        )
+        payload = await cli_module.run_cli(args)
+
+        assert payload["read_pages"]["url"] == "https://packaging.python.org/en/latest/"
+        assert captured_read_kwargs["kwargs"]["urls"] == [
+            "https://packaging.python.org/en/latest/"
+        ], captured_read_kwargs
+        assert captured_read_kwargs["kwargs"]["focus"] == "", captured_read_kwargs
 
     asyncio.run(scenario())
 
