@@ -24,6 +24,10 @@ def server_json_path() -> Path:
     return repo_root() / "server.json"
 
 
+def dockerfile_path() -> Path:
+    return repo_root() / "Dockerfile"
+
+
 def project_version() -> str:
     data = tomllib.loads(pyproject_path().read_text(encoding="utf-8"))
     return data["project"]["version"]
@@ -73,11 +77,32 @@ def _sync_server_json(version: str, check: bool) -> bool:
     return True
 
 
+def _sync_dockerfile_labels(version: str, check: bool) -> bool:
+    path = dockerfile_path()
+    original = path.read_text(encoding="utf-8")
+    updated, replacements = re.subn(
+        r'org\.opencontainers\.image\.version="[^"]+"',
+        f'org.opencontainers.image.version="{version}"',
+        original,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError(f"Could not find a single OCI version label in {path}")
+
+    if check:
+        return original == updated
+
+    if original != updated:
+        path.write_text(updated, encoding="utf-8")
+    return True
+
+
 def sync_release_metadata(check: bool = False) -> bool:
     version = project_version()
     checks = [
         _sync_tool_header(version, check=check),
         _sync_server_json(version, check=check),
+        _sync_dockerfile_labels(version, check=check),
     ]
     return all(checks)
 
@@ -89,7 +114,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Exit non-zero if tool.py or server.json are out of sync with pyproject.toml.",
+        help="Exit non-zero if release metadata files are out of sync with pyproject.toml.",
     )
     return parser.parse_args(argv)
 

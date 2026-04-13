@@ -39,7 +39,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/mrnaqa/sourceweave-web-search:0.2.1",
+      "identifier": "ghcr.io/mrnaqa/sourceweave-web-search-mcp:0.2.1",
       "runtimeHint": "docker",
       "transport": {
         "type": "streamable-http",

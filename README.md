@@ -98,7 +98,7 @@ uv run sourceweave-search-mcp
 
 The release workflow can publish a container image to:
 
-- `ghcr.io/mrnaqa/sourceweave-web-search`
+- `ghcr.io/mrnaqa/sourceweave-web-search-mcp`
 
 Example runtime:
 
@@ -107,7 +107,7 @@ docker run --rm -p 8000:8000 \
   -e SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://host.docker.internal:19080/search?format=json&q=<query>" \
   -e SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://host.docker.internal:19235" \
   -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
-  ghcr.io/mrnaqa/sourceweave-web-search:latest
+  ghcr.io/mrnaqa/sourceweave-web-search-mcp:latest
 ```
 
 Example `docker compose` recipe:
@@ -115,17 +115,17 @@ Example `docker compose` recipe:
 ```yaml
 services:
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:9-alpine
     command: ["redis-server", "--appendonly", "no"]
 
   crawl4ai:
-    image: unclecode/crawl4ai:basic-amd64
+    image: unclecode/crawl4ai:0.8.6
 
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.4.11-9e08a6771
 
-  sourceweave:
-    image: ghcr.io/mrnaqa/sourceweave-web-search:latest
+  sourceweave-mcp:
+    image: ghcr.io/mrnaqa/sourceweave-web-search-mcp:latest
     depends_on:
       - redis
       - crawl4ai
@@ -141,6 +141,8 @@ services:
 ```
 
 That gives you a local HTTP MCP endpoint at `http://127.0.0.1:8000/mcp` with the SourceWeave container linked to the supporting services by container name.
+
+The repo's own `docker compose up -d mcp` path also builds and runs this same publishable image locally as `sourceweave-web-search-mcp:local`, instead of wrapping the repo in the `uv` base image.
 
 ## Runtime Configuration
 

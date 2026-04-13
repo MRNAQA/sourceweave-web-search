@@ -7,16 +7,11 @@ include:
 
 services:
   mcp:
-    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
-    working_dir: /workspace
-    user: "${UID:-1000}:${GID:-1000}"
-    volumes:
-      - .:/workspace
+    image: sourceweave-web-search-mcp:local
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
-      HOME: /tmp
-      CRAWL4_AI_BASE_DIRECTORY: /tmp
-      UV_LINK_MODE: copy
-      UV_CACHE_DIR: /tmp/uv-cache
       FASTMCP_HOST: "${FASTMCP_HOST:-0.0.0.0}"
       FASTMCP_PORT: "${FASTMCP_PORT:-8000}"
       SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL: "${SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL:-http://searxng:8080/search?format=json&q=<query>}"
@@ -29,7 +24,6 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
-    command: ["uv", "run", "sourceweave-search-mcp", "--transport", "streamable-http"]
     ports:
       - "18000:8000"
     restart: unless-stopped

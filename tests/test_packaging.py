@@ -75,13 +75,20 @@ def test_release_metadata_is_in_sync() -> None:
     version = project_version()
     tool_source = canonical_tool_path().read_text(encoding="utf-8")
     server_json = server_json_path().read_text(encoding="utf-8")
+    dockerfile = _repo_root().joinpath("Dockerfile").read_text(encoding="utf-8")
 
     assert f'version = "{version}"' in _repo_root().joinpath(
         "pyproject.toml"
     ).read_text(encoding="utf-8")
     assert f"version: {version}" in tool_source
     assert f'"version": "{version}"' in server_json
-    assert f"ghcr.io/mrnaqa/sourceweave-web-search:{version}" in server_json
+    assert f"ghcr.io/mrnaqa/sourceweave-web-search-mcp:{version}" in server_json
+    assert 'org.opencontainers.image.title="sourceweave-web-search-mcp"' in dockerfile
+    assert f'org.opencontainers.image.version="{version}"' in dockerfile
+    assert (
+        'io.modelcontextprotocol.server.name="io.github.mrnaqa/sourceweave-web-search"'
+        in dockerfile
+    )
 
 
 def test_openwebui_build_check_reports_drift_and_recovers(tmp_path: Path) -> None:

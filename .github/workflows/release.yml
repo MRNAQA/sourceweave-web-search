@@ -112,7 +112,7 @@ jobs:
 
       - name: Smoke build Docker image
         if: ${{ inputs.publish_ghcr || inputs.publish_dockerhub }}
-        run: docker build -t sourceweave-web-search:release .
+        run: docker build -t sourceweave-web-search-mcp:release .
 
       - name: Derive release metadata
         id: release_meta
@@ -123,10 +123,10 @@ jobs:
           set -euo pipefail
           TAG_NAME="${{ inputs.tag }}"
           VERSION="${TAG_NAME#v}"
-          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sourceweave-web-search"
+          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sourceweave-web-search-mcp"
           DOCKERHUB_IMAGE="$DOCKERHUB_REPOSITORY"
           if [ -z "$DOCKERHUB_IMAGE" ]; then
-            DOCKERHUB_IMAGE="mrnaqa/sourceweave-web-search"
+            DOCKERHUB_IMAGE="mrnaqa/sourceweave-web-search-mcp"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
@@ -199,7 +199,7 @@ jobs:
           push: true
           tags: ${{ steps.container_tags.outputs.tags }}
           labels: |
-            org.opencontainers.image.title=sourceweave-web-search
+            org.opencontainers.image.title=sourceweave-web-search-mcp
             org.opencontainers.image.description=MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.release_meta.outputs.version }}
