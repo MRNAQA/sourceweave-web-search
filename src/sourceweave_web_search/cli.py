@@ -16,7 +16,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         dest="urls",
         action="append",
         default=[],
-        help="Optional URL to crawl alongside search results. Repeatable.",
+        help=(
+            "Optional URL to crawl alongside search results. Repeatable. "
+            "May be a plain URL string or a JSON object like "
+            '\'{"url": "https://example.com/file.pdf", "convert_document": true}\'.'
+        ),
+    )
+    parser.add_argument(
+        "--related-links-limit",
+        type=int,
+        default=3,
+        help="Maximum number of stored related links to include per read_page result. Use 0 to omit them.",
     )
     parser.add_argument(
         "--depth",
@@ -77,6 +87,27 @@ def _page_ids_from_results(results: Any, count: int) -> list[str]:
     ]
 
 
+def _urls_from_args(args: argparse.Namespace) -> list[Any] | None:
+    normalized_urls: list[Any] = []
+    for raw_value in args.urls:
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        if value.startswith("{"):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"Invalid JSON passed to --url: {exc}") from exc
+            if not isinstance(parsed, dict) or not parsed.get("url"):
+                raise SystemExit(
+                    "JSON passed to --url must be an object with at least a 'url' field"
+                )
+            normalized_urls.append(parsed)
+            continue
+        normalized_urls.append(value)
+    return normalized_urls or None
+
+
 def _valve_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "SEARXNG_BASE_URL": args.searxng_base_url,
@@ -86,7 +117,11 @@ def _valve_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 async def _read_pages(
-    tool: Any, page_ids: list[str], focus: str, max_chars: int
+    tool: Any,
+    page_ids: list[str],
+    focus: str,
+    related_links_limit: int,
+    max_chars: int,
 ) -> Any:
     if not page_ids:
         return None
@@ -94,6 +129,7 @@ async def _read_pages(
     return await tool.read_page(
         page_ids[0] if len(page_ids) == 1 else page_ids,
         focus=focus,
+        related_links_limit=related_links_limit,
         max_chars=max_chars,
     )
 
@@ -108,7 +144,7 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
     if args.query:
         results = await tool.search_and_crawl(
             query=args.query,
-            urls=args.urls or None,
+            urls=_urls_from_args(args),
             depth=args.depth,
             max_results=args.max_results,
             fresh=args.fresh,
@@ -119,7 +155,13 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
 
         read_first_count = max(args.read_first_pages, 1 if args.read_first_page else 0)
         page_ids = _page_ids_from_results(results, read_first_count)
-        read_payload = await _read_pages(tool, page_ids, args.focus, args.max_chars)
+        read_payload = await _read_pages(
+            tool,
+            page_ids,
+            args.focus,
+            args.related_links_limit,
+            args.max_chars,
+        )
         if read_payload is not None:
             payload["read_page"] = read_payload
 
@@ -129,6 +171,7 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
             tool,
             requested_page_ids,
             args.focus,
+            args.related_links_limit,
             args.max_chars,
         )
 

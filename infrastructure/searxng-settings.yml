@@ -1,0 +1,68 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - brave
+      - qwant
+      - mojeek
+      - wikipedia
+      - wikidata
+      - arxiv
+      - pubmed
+      - github
+      - stackoverflow
+
+general:
+  debug: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  formats:
+    - json
+    - html
+
+server:
+  limiter: false
+  image_proxy: false
+  public_instance: false
+  method: "GET"
+
+outgoing:
+  request_timeout: 2.5
+  pool_connections: 60
+  pool_maxsize: 10
+  enable_http2: true
+
+engines:
+  - name: brave
+    weight: 3
+    timeout: 2.5
+
+  - name: qwant
+    weight: 2
+    timeout: 2.5
+
+  - name: mojeek
+    weight: 1
+    timeout: 2.5
+
+  - name: wikipedia
+    weight: 2
+
+  - name: wikidata
+    weight: 1
+
+  - name: arxiv
+    weight: 2
+
+  - name: pubmed
+    weight: 2
+
+  - name: github
+    weight: 2
+
+  - name: stackoverflow
+    weight: 2

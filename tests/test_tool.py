@@ -5,12 +5,12 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from sourceweave_web_search.config import RuntimeOverrides, build_tools
 from sourceweave_web_search.tool import Tools, _negative_ttl
 
 
@@ -18,10 +18,52 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _install_memory_cache(
+    monkeypatch: pytest.MonkeyPatch, tool: Tools
+) -> dict[str, str]:
+    store: dict[str, str] = {}
+
+    async def fake_get(key: str) -> str | None:
+        return store.get(key)
+
+    async def fake_setex(key: str, ttl_s: int, value: str) -> None:
+        _ = ttl_s
+        store[key] = value
+
+    async def fake_exists(key: str) -> bool:
+        return key in store
+
+    monkeypatch.setattr(tool._cache, "get", fake_get)
+    monkeypatch.setattr(tool._cache, "setex", fake_setex)
+    monkeypatch.setattr(tool._cache, "exists", fake_exists)
+    return store
+
+
 def _make_crawl_result(
-    tool: Tools, url: str, title: str, content: str, query: str
-) -> dict:
-    page_id = tool._page_store.put(url, title, content)
+    tool: Tools,
+    url: str,
+    title: str,
+    content: str,
+    query: str,
+    *,
+    content_type: str = "html",
+    content_source: str = "crawled_page",
+    full_content_available: bool = True,
+    related_links: list[dict[str, str]] | None = None,
+    related_links_total: int = 0,
+    images: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    page_id = tool._page_store.put(
+        url,
+        title,
+        content,
+        content_type=content_type,
+        content_source=content_source,
+        full_content_available=full_content_available,
+        related_links=related_links,
+        related_links_total=related_links_total,
+        images=images,
+    )
     compact = tool._build_compact_summary(content, query)
     return {
         "url": url,
@@ -30,15 +72,19 @@ def _make_crawl_result(
         "summary": compact["summary"],
         "key_points": compact["key_points"],
         "content_length": len(content),
-        "images": [],
-        "content_type": "html",
+        "images": list(images or []),
+        "content_type": content_type,
+        "content_source": content_source,
+        "full_content_available": full_content_available,
+        "related_links": list(related_links or []),
+        "related_links_total": related_links_total,
         "_content": content,
     }
 
 
 @pytest.mark.integration
-def test_search_and_read_round_trip():
-    async def scenario():
+def test_search_and_read_round_trip() -> None:
+    async def scenario() -> None:
         tool = Tools()
         results = await tool.search_and_crawl(
             query="python programming",
@@ -51,7 +97,17 @@ def test_search_and_read_round_trip():
         assert results, "search_and_crawl returned no results"
 
         first = results[0]
-        for key in ("url", "title", "page_id", "summary", "key_points"):
+        for key in (
+            "url",
+            "title",
+            "page_id",
+            "summary",
+            "key_points",
+            "content_type",
+            "source_type",
+            "content_source",
+            "full_content_available",
+        ):
             assert key in first, f"missing key '{key}' in result: {first}"
 
         page = await tool.read_page(first["page_id"], max_chars=1200)
@@ -62,8 +118,8 @@ def test_search_and_read_round_trip():
 
 
 @pytest.mark.integration
-def test_read_page_works_from_fresh_tool_instance():
-    async def scenario():
+def test_read_page_works_from_fresh_tool_instance() -> None:
+    async def scenario() -> None:
         tool = Tools()
         results = await tool.search_and_crawl(
             query="asyncio python tutorial",
@@ -84,8 +140,8 @@ def test_read_page_works_from_fresh_tool_instance():
     asyncio.run(scenario())
 
 
-def test_read_page_accepts_multiple_page_ids_in_one_call():
-    async def scenario():
+def test_read_page_accepts_multiple_page_ids_in_one_call() -> None:
+    async def scenario() -> None:
         tool = Tools()
         first_page_id = tool._page_store.put(
             "https://example.com/alpha",
@@ -113,8 +169,8 @@ def test_read_page_accepts_multiple_page_ids_in_one_call():
     asyncio.run(scenario())
 
 
-def test_read_page_multi_returns_partial_errors_for_missing_ids():
-    async def scenario():
+def test_read_page_multi_returns_partial_errors_for_missing_ids() -> None:
+    async def scenario() -> None:
         tool = Tools()
         first_page_id = tool._page_store.put(
             "https://example.com/gamma",
@@ -137,88 +193,200 @@ def test_read_page_multi_returns_partial_errors_for_missing_ids():
     asyncio.run(scenario())
 
 
-def test_explicit_url_crawl_without_relying_on_search_ranking(monkeypatch):
-    async def scenario():
+def test_read_page_returns_content_state_and_related_assets() -> None:
+    async def scenario() -> None:
         tool = Tools()
-        tool._cache.enabled = False
-        query = "python about page"
-        explicit_url = "https://www.python.org/about/"
-        search_url = "https://www.python.org/downloads/release/python-3114/"
-
-        async def fake_search(query_variant, __event_emitter__=None):
-            return [
-                tool._build_candidate(
-                    search_url,
-                    title="Python 3.11.4 release",
-                    snippet="Release notes and downloads for Python 3.11.4.",
-                    search_rank=1,
-                    retrieved_by_queries=[query_variant],
-                )
-            ]
-
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            page_bodies = {
-                explicit_url: (
-                    "About Python",
-                    "# About Python\n\nMission statement.",
-                ),
-                search_url: (
-                    "Python 3.11.4 release",
-                    "# Python 3.11.4 release\n\nDetailed release notes, changelog, installers, and download instructions for Python 3.11.4.",
-                ),
-            }
-            return {
-                "content": [
-                    _make_crawl_result(tool, url, *page_bodies[url], query or "")
-                    for url in urls
-                    if url in page_bodies
-                ],
-                "images": [],
-            }
-
-        monkeypatch.setattr(tool, "_search_searxng", fake_search)
-        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
-
-        results = await tool.search_and_crawl(
-            query=query,
-            urls=[explicit_url],
-            depth="quick",
-            max_results=1,
-            fresh=True,
+        page_id = tool._page_store.put(
+            "https://example.com/guide",
+            "Guide",
+            "# Guide\n\nThis section explains the guide in detail.\n\n"
+            "## Focus\n\nThis section is specifically about focus extraction and should be retained.\n\n"
+            "## Extra\n\nAdditional material that makes the content long enough to be truncated.",
+            content_type="html",
+            source_type="explicit_url",
+            content_source="crawled_page",
+            full_content_available=True,
+            related_links=[
+                {"url": "https://example.com/related-a", "text": "Related A"}
+            ],
+            related_links_total=2,
+            images=[{"url": "https://example.com/image.png", "alt": "Guide image"}],
         )
 
-        assert isinstance(results, list), results
-        assert results, "explicit URL crawl returned no results"
-        assert results[0]["url"] == explicit_url, results[0]
-        assert results[0]["source_type"] == "explicit_url", results[0]
-        assert results[0]["pre_crawl_score"] >= 100, results[0]
+        page = await tool.read_page(
+            page_id,
+            focus="focus extraction",
+            related_links_limit=1,
+            max_chars=90,
+        )
+
+        assert page["page_id"] == page_id, page
+        assert page["content_type"] == "html", page
+        assert page["source_type"] == "explicit_url", page
+        assert page["content_source"] == "crawled_page", page
+        assert page["full_content_available"] is True, page
+        assert page["focus_applied"] is True, page
+        assert page["truncated"] is True, page
+        assert "page_quality" not in page, page
+        assert page["related_links"] == [
+            {"url": "https://example.com/related-a", "text": "Related A"}
+        ], page
+        assert page["related_links_total"] == 2, page
+        assert page["related_links_more_available"] is True, page
+        assert page["images"] == [
+            {"url": "https://example.com/image.png", "alt": "Guide image"}
+        ], page
 
     asyncio.run(scenario())
 
 
-def test_multiple_explicit_urls_preserve_input_order(monkeypatch):
-    async def scenario():
+def test_search_and_read_page_mark_challenge_pages() -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
-        query = "python reference pages"
+        url = "https://www.reddit.com/r/reactjs/comments/example"
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    url,
+                    title="Reddit - Prove your humanity",
+                    snippet="Challenge page",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            assert urls_to_fetch == [url]
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        "Reddit - Prove your humanity",
+                        "# Prove your humanity\n\nWe are committed to safety and security. But not for bots. Complete the challenge below and let us know you are a real person.",
+                        query or "",
+                    )
+                ]
+            }
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        try:
+            results = await tool.search_and_crawl(
+                query="react useEffect cleanup",
+                depth="quick",
+                max_results=1,
+                fresh=True,
+            )
+            assert results[0]["page_quality"] == "challenge", results
+
+            page = await tool.read_page(results[0]["page_id"], max_chars=400)
+            assert page["page_quality"] == "challenge", page
+        finally:
+            monkeypatch.undo()
+
+    asyncio.run(scenario())
+
+
+def test_read_page_marks_blocked_pages() -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        page_id = tool._page_store.put(
+            "https://example.com/blocked",
+            "Access denied",
+            "Access denied. You do not have permission to access this resource. Error code: 1020.",
+            content_type="html",
+            content_source="crawled_page",
+            full_content_available=True,
+        )
+
+        page = await tool.read_page(page_id, max_chars=500)
+
+        assert page["page_quality"] == "blocked", page
+
+    asyncio.run(scenario())
+
+
+def test_normalize_related_links_skips_challenge_login_and_navigation_junk() -> None:
+    base_url = "https://www.reddit.com/r/reactjs/comments/example"
+    links, total = Tools._normalize_related_links(
+        base_url,
+        {
+            "internal": [
+                {
+                    "href": "/r/reactjs/comments/example?js_challenge=1&token=abc",
+                    "text": "Skip to main content",
+                },
+                {"href": "/login/", "text": "Log In"},
+                {"href": "/", "text": "Home"},
+                {"href": "/r/reactjs/wiki", "text": "Wiki"},
+                {"href": "/r/reactjs/comments/next", "text": "Next thread"},
+            ],
+            "external": [
+                {
+                    "href": "https://react.dev/reference/react/useEffect",
+                    "text": "React docs",
+                }
+            ],
+        },
+        limit=5,
+    )
+
+    assert total == 3
+    assert links == [
+        {"url": "https://www.reddit.com/r/reactjs/wiki", "text": "Wiki"},
+        {
+            "url": "https://www.reddit.com/r/reactjs/comments/next",
+            "text": "Next thread",
+        },
+        {"url": "https://react.dev/reference/react/useEffect", "text": "React docs"},
+    ]
+
+
+def test_explicit_urls_preserve_input_order_ahead_of_search_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
         explicit_urls = [
             "https://docs.python.org/3/tutorial/",
             "https://docs.python.org/3/library/",
         ]
         search_url = "https://docs.python.org/3/whatsnew/3.12.html"
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return [
                 tool._build_candidate(
                     search_url,
                     title="What's New In Python 3.12",
                     snippet="Release highlights and new features for Python 3.12.",
                     search_rank=1,
-                    retrieved_by_queries=[query_variant],
                 )
             ]
 
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
+        async def fake_crawl(
+            urls: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
             page_bodies = {
                 explicit_urls[0]: (
                     "Python Tutorial",
@@ -233,12 +401,10 @@ def test_multiple_explicit_urls_preserve_input_order(monkeypatch):
                     "# What's New In Python 3.12\n\nFeature highlights and upgrade notes for Python 3.12.",
                 ),
             }
-            crawl_order = [explicit_urls[1], search_url, explicit_urls[0]]
             return {
                 "content": [
                     _make_crawl_result(tool, url, *page_bodies[url], query or "")
-                    for url in crawl_order
-                    if url in urls
+                    for url in urls
                 ],
                 "images": [],
             }
@@ -247,7 +413,7 @@ def test_multiple_explicit_urls_preserve_input_order(monkeypatch):
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
         results = await tool.search_and_crawl(
-            query=query,
+            query="python reference pages",
             urls=explicit_urls,
             depth="quick",
             max_results=2,
@@ -262,90 +428,38 @@ def test_multiple_explicit_urls_preserve_input_order(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_explicit_url_survives_crawl_candidate_truncation(monkeypatch):
-    async def scenario():
+def test_explicit_url_failure_returns_search_only_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
-        query = "relevant api docs historical data no key"
-        explicit_url = "https://example.com/user-picked"
-        search_urls = [
-            f"https://docs{idx}.example.com/relevant-api-docs-{idx}"
-            for idx in range(1, 6)
-        ]
-        crawl_calls = []
-
-        async def fake_search(query_variant, __event_emitter__=None):
-            return [
-                tool._build_candidate(
-                    url,
-                    title=f"Relevant API docs {idx}",
-                    snippet="Relevant API docs with endpoints, examples, free access, and historical data.",
-                    search_rank=idx,
-                    retrieved_by_queries=[query_variant],
-                )
-                for idx, url in enumerate(search_urls, start=1)
-            ]
-
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            crawl_calls.extend(urls)
-            results = []
-            for url in urls:
-                if url == explicit_url:
-                    title = "User picked"
-                    content = "# Picked\n\nA page with short unrelated text."
-                else:
-                    title = "Relevant API docs"
-                    content = (
-                        "# Relevant API docs\n\n"
-                        "Relevant api docs historical data no api key. " * 30
-                    )
-                results.append(
-                    _make_crawl_result(tool, url, title, content, query or "")
-                )
-            return {"content": results, "images": []}
-
-        monkeypatch.setattr(tool, "_search_searxng", fake_search)
-        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
-
-        results = await tool.search_and_crawl(
-            query=query,
-            urls=[explicit_url],
-            depth="quick",
-            max_results=1,
-            fresh=True,
-        )
-
-        assert crawl_calls[0] == explicit_url, crawl_calls
-        assert explicit_url in crawl_calls, crawl_calls
-        assert len(crawl_calls) == 4, crawl_calls
-        assert [result["url"] for result in results] == [explicit_url], results
-        assert results[0]["source_type"] == "explicit_url", results[0]
-
-    asyncio.run(scenario())
-
-
-def test_explicit_url_failure_falls_back_to_ranked_search_results(monkeypatch):
-    async def scenario():
-        tool = Tools()
-        tool._cache.enabled = False
-        query = "python about page"
         explicit_url = "https://www.python.org/about/"
         search_url = "https://www.python.org/community/"
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return [
                 tool._build_candidate(
                     search_url,
                     title="Python Community",
                     snippet="Community resources, events, and Python Software Foundation links.",
                     search_rank=1,
-                    retrieved_by_queries=[query_variant],
                 )
             ]
 
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            return {
-                "content": [
+        async def fake_crawl(
+            urls: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            results = []
+            if search_url in urls:
+                results.append(
                     _make_crawl_result(
                         tool,
                         search_url,
@@ -353,38 +467,40 @@ def test_explicit_url_failure_falls_back_to_ranked_search_results(monkeypatch):
                         "# Python Community\n\nThe Python community page collects news, events, and ways to get involved.",
                         query or "",
                     )
-                ]
-                if search_url in urls
-                else [],
-                "images": [],
-            }
+                )
+            return {"content": results, "images": []}
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
         results = await tool.search_and_crawl(
-            query=query,
+            query="python about page",
             urls=[explicit_url],
             depth="quick",
             max_results=1,
             fresh=True,
         )
 
-        assert isinstance(results, list), results
-        assert [result["url"] for result in results] == [search_url], results
-        assert all(result["source_type"] == "search_result" for result in results), (
-            results
-        )
+        assert [result["url"] for result in results] == [explicit_url], results
+        assert results[0]["source_type"] == "explicit_url", results[0]
+        assert results[0]["fallback_reason"] == "search_only", results[0]
+        assert results[0]["content_source"] == "search_snippet", results[0]
+        assert results[0]["full_content_available"] is False, results[0]
 
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_returns_empty_list_when_no_candidates(monkeypatch):
-    async def scenario():
+def test_search_and_crawl_returns_empty_list_when_no_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return []
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
@@ -400,34 +516,110 @@ def test_search_and_crawl_returns_empty_list_when_no_candidates(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_batch_crawl_failure_retries_urls_individually(monkeypatch):
-    async def scenario():
+def test_search_and_crawl_uses_single_search_call_and_preserves_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        query = "react useEffect cleanup example official documentation"
+        urls = [
+            "https://react.dev/reference/react/useEffect",
+            "https://legacy.reactjs.org/docs/hooks-effect.html",
+            "https://reacttraining.com/blog/useEffect-cleanup",
+        ]
+        seen_queries: list[str] = []
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = __event_emitter__
+            seen_queries.append(query_value)
+            return [
+                tool._build_candidate(
+                    url,
+                    title=f"Title {idx}",
+                    snippet=f"Snippet {idx}",
+                    search_rank=idx,
+                )
+                for idx, url in enumerate(urls, start=1)
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            url = urls_to_fetch[0]
+            idx = urls.index(url) + 1
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        f"Crawled {idx}",
+                        f"# Crawled {idx}\n\nUseful crawled content for result {idx}.",
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query=query,
+            depth="quick",
+            max_results=3,
+            fresh=True,
+        )
+
+        assert seen_queries == [query], seen_queries
+        assert [result["url"] for result in results] == urls, results
+        assert [result["search_rank"] for result in results] == [1, 2, 3], results
+        assert all(result["content_type"] == "html" for result in results), results
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_fetches_html_pages_one_by_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
         urls = [
             "https://docs.example.com/react/use-effect",
             "https://docs.example.com/react/use-layout-effect",
         ]
-        crawl_calls = []
+        crawl_calls: list[list[str]] = []
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return [
                 tool._build_candidate(
                     url,
                     title=f"Doc for {idx}",
                     snippet="Official React documentation example.",
                     search_rank=idx,
-                    retrieved_by_queries=[query_variant],
                 )
                 for idx, url in enumerate(urls, start=1)
             ]
 
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            crawl_calls.append(list(urls))
-            if len(urls) > 1:
-                return {"error": "batch timeout", "details": "timeout"}
-
-            url = urls[0]
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            url = urls_to_fetch[0]
             return {
                 "content": [
                     _make_crawl_result(
@@ -452,33 +644,40 @@ def test_batch_crawl_failure_retries_urls_individually(monkeypatch):
         )
 
         assert len(results) == 2, results
-        assert crawl_calls[0] == urls, crawl_calls
-        assert crawl_calls[1:] == [[urls[0]], [urls[1]]], crawl_calls
+        assert crawl_calls == [[urls[0]], [urls[1]]], crawl_calls
 
     asyncio.run(scenario())
 
 
-def test_search_and_crawl_falls_back_to_search_snippets_when_crawl_returns_nothing(
-    monkeypatch,
-):
-    async def scenario():
+def test_search_and_crawl_falls_back_to_search_snippet_when_crawl_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
         search_url = "https://react.dev/reference/react/useEffect"
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return [
                 tool._build_candidate(
                     search_url,
                     title="useEffect - React",
                     snippet="Official React documentation covering useEffect cleanup behavior.",
                     search_rank=1,
-                    retrieved_by_queries=[query_variant],
                 )
             ]
 
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            return {"content": [], "images": []}
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = urls_to_fetch, query, timeout_s, __event_emitter__
+            return {"error": "timeout", "details": "timeout"}
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
@@ -494,59 +693,56 @@ def test_search_and_crawl_falls_back_to_search_snippets_when_crawl_returns_nothi
         assert results[0]["url"] == search_url, results
         assert results[0]["fallback_reason"] == "search_only", results[0]
         assert results[0]["content_type"] == "search_result", results[0]
-        assert results[0]["search_snippet"], results[0]
+        assert results[0]["content_source"] == "search_snippet", results[0]
+        assert results[0]["full_content_available"] is False, results[0]
+        assert "related_links" not in results[0], results[0]
 
     asyncio.run(scenario())
 
 
-def test_transient_failure_negative_ttls_are_shorter():
-    assert _negative_ttl("timeout") == 45
-    assert _negative_ttl("500") == 90
-    assert _negative_ttl("403") == 180
-    assert _negative_ttl("blocked") == 300
-    assert _negative_ttl("404") == 1800
-
-
-def test_search_and_crawl_records_query_failure_metadata(monkeypatch):
-    async def scenario():
+def test_search_and_crawl_records_metadata_for_per_url_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
         first_url = "https://react.dev/reference/react/useEffect"
         second_url = "https://blog.example.com/react-cleanup"
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return [
                 tool._build_candidate(
                     first_url,
                     title="useEffect - React",
                     snippet="Official React documentation covering useEffect cleanup behavior.",
                     search_rank=1,
-                    retrieved_by_queries=[query_variant],
                 ),
                 tool._build_candidate(
                     second_url,
                     title="React cleanup article",
                     snippet="Third-party article about cleanup behavior.",
                     search_rank=2,
-                    retrieved_by_queries=[query_variant],
                 ),
             ]
 
         async def fake_crawl(
-            urls,
-            query=None,
-            timeout_s=None,
-            __event_emitter__=None,
-        ):
-            if len(urls) > 1:
-                return {"error": "batch timeout", "details": "timeout"}
-            if urls[0] == second_url:
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            url = urls_to_fetch[0]
+            if url == second_url:
                 if tool._active_query_metadata is not None:
                     tool._record_failed_url(
                         tool._active_query_metadata,
                         second_url,
                         "timeout",
-                        stage="crawl_single_retry",
+                        stage="crawl",
                         recovered_by_single_retry=False,
                     )
                 return {"error": "timeout", "details": "timeout"}
@@ -574,14 +770,14 @@ def test_search_and_crawl_records_query_failure_metadata(monkeypatch):
         )
 
         metadata = tool.last_query_metadata
-        assert len(results) == 1, results
+        assert len(results) == 2, results
         assert metadata["search"]["candidate_count"] == 2, metadata
         assert metadata["crawl"]["attempted"] == 2, metadata
-        assert metadata["crawl"]["batch_failures"] == 1, metadata
-        assert metadata["crawl"]["single_retry_attempts"] == 2, metadata
-        assert metadata["crawl"]["single_retry_successes"] == 1, metadata
-        assert metadata["crawl"]["failed"] >= 1, metadata
-        assert metadata["fallbacks_used"] == ["batch_to_single"], metadata
+        assert metadata["crawl"]["failed"] == 1, metadata
+        assert metadata["fallbacks_used"] == ["search_only"], metadata
+        assert results[0]["url"] == first_url, results
+        assert results[1]["url"] == second_url, results
+        assert results[1]["fallback_reason"] == "search_only", results
         assert any(
             item["url"] == second_url for item in metadata["crawl"]["failed_urls"]
         ), metadata
@@ -589,32 +785,450 @@ def test_search_and_crawl_records_query_failure_metadata(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_cli_can_include_search_metadata(monkeypatch):
-    async def fake_search_and_crawl(*args, **kwargs):
-        return [
-            {
-                "url": "https://example.com/doc",
-                "title": "Example",
-                "page_id": "page123",
-                "summary": "Example summary",
-                "key_points": ["Example summary"],
-            }
-        ]
+def test_search_and_crawl_reuses_cached_crawled_page_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
+        search_url = "https://react.dev/reference/react/useEffect"
+        search_calls: list[str] = []
+        crawl_calls: list[list[str]] = []
 
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = __event_emitter__
+            search_calls.append(query_value)
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="useEffect - React",
+                    snippet="Official React documentation covering useEffect cleanup behavior.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        search_url,
+                        "useEffect - React",
+                        "# useEffect\n\nFull page content saved during search_and_crawl.",
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        first_results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=1,
+            fresh=False,
+        )
+        second_results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=1,
+            fresh=False,
+        )
+
+        assert search_calls == [
+            "react useEffect cleanup example official documentation"
+        ], search_calls
+        assert crawl_calls == [[search_url]], crawl_calls
+        assert first_results[0]["page_id"] == second_results[0]["page_id"], (
+            first_results,
+            second_results,
+        )
+        assert second_results[0]["content_source"] == "crawled_page", second_results
+        assert second_results[0]["full_content_available"] is True, second_results
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_does_not_reuse_search_only_fallback_as_full_page_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
+        search_url = "https://react.dev/reference/react/useEffect"
+        crawl_calls: list[list[str]] = []
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="useEffect - React",
+                    snippet="Official React documentation covering useEffect cleanup behavior.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {"error": "timeout", "details": "timeout"}
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        first_results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=1,
+            fresh=False,
+        )
+        assert first_results[0]["fallback_reason"] == "search_only", first_results
+
+        crawl_calls.clear()
+
+        async def succeeding_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        search_url,
+                        "useEffect - React",
+                        "# useEffect\n\nNow we have real crawled page content.",
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_crawl_url", succeeding_crawl)
+
+        second_results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=1,
+            fresh=False,
+        )
+
+        assert crawl_calls == [[search_url]], crawl_calls
+        assert second_results[0]["content_source"] == "crawled_page", second_results
+        assert second_results[0]["full_content_available"] is True, second_results
+        assert "fallback_reason" not in second_results[0], second_results
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_can_convert_documents_per_explicit_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        pdf_url = "https://example.com/guide.pdf"
+        fetch_calls: list[str] = []
+        crawl_calls: list[list[str]] = []
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return []
+
+        async def fake_fetch_document(
+            url: str,
+            query: str = "",
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = query, timeout_s, __event_emitter__
+            fetch_calls.append(url)
+            return _make_crawl_result(
+                tool,
+                url,
+                "Guide PDF",
+                "# Guide PDF\n\nConverted document content.",
+                "guide pdf",
+                content_type="document",
+                content_source="converted_document",
+            )
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = query, timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {"content": [], "images": []}
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query="guide pdf",
+            urls=[{"url": pdf_url, "convert_document": True}],
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+
+        assert fetch_calls == [pdf_url], fetch_calls
+        assert crawl_calls == [], crawl_calls
+        assert results[0]["url"] == pdf_url, results
+        assert results[0]["content_type"] == "document", results[0]
+        assert results[0]["content_source"] == "converted_document", results[0]
+        assert results[0]["source_type"] == "explicit_url", results[0]
+
+    asyncio.run(scenario())
+
+
+def test_search_and_crawl_does_not_auto_convert_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        pdf_url = "https://example.com/guide.pdf"
+        fetch_calls: list[str] = []
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    pdf_url,
+                    title="Guide PDF",
+                    snippet="A downloadable PDF guide.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_fetch_document(
+            url: str,
+            query: str = "",
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any] | None:
+            _ = query, timeout_s, __event_emitter__
+            fetch_calls.append(url)
+            return None
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
+
+        results = await tool.search_and_crawl(
+            query="guide pdf",
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+
+        assert fetch_calls == [], fetch_calls
+        assert results[0]["url"] == pdf_url, results
+        assert results[0]["fallback_reason"] == "search_only", results[0]
+        assert results[0]["content_source"] == "search_snippet", results[0]
+
+    asyncio.run(scenario())
+
+
+def test_read_page_applies_related_links_limit_and_can_omit_links(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        url = "https://example.com/guide"
+        related_links = [
+            {"url": "https://example.com/related-a", "text": "Related A"},
+            {"url": "https://example.com/related-b", "text": "Related B"},
+        ]
+        images = [{"url": "https://example.com/image.png", "alt": "Guide image"}]
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    url,
+                    title="Guide",
+                    snippet="Primary guide.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        "Guide",
+                        "# Guide\n\nPrimary guide content.",
+                        query or "",
+                        related_links=related_links,
+                        related_links_total=7,
+                        images=images,
+                    )
+                ],
+                "images": images,
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        search_results = await tool.search_and_crawl(
+            query="primary guide",
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+        page_id = search_results[0]["page_id"]
+        default_links = await tool.read_page(page_id, related_links_limit=3)
+        no_links = await tool.read_page(page_id, related_links_limit=0)
+
+        assert "related_links" not in search_results[0], search_results[0]
+        assert search_results[0]["images"] == images, search_results[0]
+        assert default_links["related_links"] == related_links, default_links
+        assert default_links["related_links_total"] == 7, default_links
+        assert default_links["related_links_more_available"] is True, default_links
+        assert default_links["images"] == images, default_links
+        assert "related_links" not in no_links, no_links
+        assert no_links["related_links_total"] == 7, no_links
+        assert no_links["related_links_more_available"] is True, no_links
+
+    asyncio.run(scenario())
+
+
+def test_read_page_reuses_content_from_initial_crawl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        search_url = "https://react.dev/reference/react/useEffect"
+        crawl_calls: list[list[str]] = []
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    search_url,
+                    title="useEffect - React",
+                    snippet="Official React documentation covering useEffect cleanup behavior.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        search_url,
+                        "useEffect - React",
+                        "# useEffect\n\nFull page content saved during search_and_crawl.",
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_and_crawl(
+            query="react useEffect cleanup example official documentation",
+            depth="quick",
+            max_results=1,
+            fresh=True,
+        )
+        page_id = results[0]["page_id"]
+
+        pages = await tool.read_page([page_id], max_chars=500)
+
+        assert crawl_calls == [[search_url]], crawl_calls
+        assert pages["returned_pages"] == 1, pages
+        assert (
+            "Full page content saved during search_and_crawl."
+            in pages["pages"][0]["content"]
+        ), pages
+        assert pages["pages"][0]["content_source"] == "crawled_page", pages
+        assert pages["pages"][0]["full_content_available"] is True, pages
+
+    asyncio.run(scenario())
+
+
+def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeTool:
-        def __init__(self):
+        def __init__(self) -> None:
             self.last_query_metadata = {
                 "query": "example query",
                 "crawl": {"failed": 1},
             }
 
-        async def search_and_crawl(self, *args, **kwargs):
-            return await fake_search_and_crawl(*args, **kwargs)
+        async def search_and_crawl(
+            self, *args: Any, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            _ = args, kwargs
+            return [
+                {
+                    "url": "https://example.com/doc",
+                    "title": "Example",
+                    "page_id": "page123",
+                    "summary": "Example summary",
+                    "key_points": ["Example summary"],
+                }
+            ]
 
-        async def read_page(self, *args, **kwargs):
+        async def read_page(self, *args: Any, **kwargs: Any) -> None:
+            _ = args, kwargs
             return None
 
-    async def scenario():
+    async def scenario() -> None:
         from sourceweave_web_search import cli as cli_module
 
         monkeypatch.setattr(
@@ -628,8 +1242,69 @@ def test_cli_can_include_search_metadata(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_cli_parses_json_url_objects_and_read_related_links_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_search_kwargs: dict[str, Any] = {}
+    captured_read_kwargs: dict[str, Any] = {}
+
+    class FakeTool:
+        last_query_metadata: dict[str, Any] = {}
+
+        async def search_and_crawl(
+            self, *args: Any, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            _ = args
+            captured_search_kwargs.update(kwargs)
+            return [
+                {
+                    "url": "https://example.com/guide.pdf",
+                    "title": "Guide PDF",
+                    "page_id": "page123",
+                    "summary": "Guide summary",
+                    "key_points": ["Guide summary"],
+                }
+            ]
+
+        async def read_page(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            captured_read_kwargs["args"] = args
+            captured_read_kwargs["kwargs"] = kwargs
+            return {"page_id": "page123", "content": "Guide content"}
+
+    async def scenario() -> None:
+        from sourceweave_web_search import cli as cli_module
+
+        monkeypatch.setattr(
+            cli_module, "build_tools", lambda valve_overrides=None: FakeTool()
+        )
+        args = cli_module.parse_args(
+            [
+                "--query",
+                "guide pdf",
+                "--url",
+                '{"url": "https://example.com/guide.pdf", "convert_document": true}',
+                "--read-first-page",
+                "--related-links-limit",
+                "2",
+            ]
+        )
+        await cli_module.run_cli(args)
+
+        assert captured_search_kwargs["urls"] == [
+            {
+                "url": "https://example.com/guide.pdf",
+                "convert_document": True,
+            }
+        ], captured_search_kwargs
+        assert captured_read_kwargs["kwargs"]["related_links_limit"] == 2, (
+            captured_read_kwargs
+        )
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.integration
-def test_run_tool_call_batches_read_page_results():
+def test_run_tool_call_batches_read_page_results() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -662,267 +1337,52 @@ def test_run_tool_call_batches_read_page_results():
     assert not batched_read["errors"], batched_read
 
 
-def test_generate_query_variants_adds_retrieval_expansion():
-    tool = Tools()
-
-    variants = tool._generate_query_variants(
-        "How do I find a free gold price api with no key and historical data"
-    )
-
-    assert (
-        variants[0]
-        == "How do I find a free gold price api with no key and historical data"
-    )
-    assert len(variants) >= 2, variants
-    assert "how" not in variants[1].lower(), variants
-    assert any(
-        variant.startswith("api historical free")
-        or variant.startswith("api historical free gold")
-        for variant in variants[1:]
-    ), variants
-    assert not any("site:reddit.com" in variant for variant in variants), variants
-
-
-def test_generate_query_variants_adds_reddit_only_when_requested():
-    tool = Tools()
-
-    variants = tool._generate_query_variants(
-        "reddit discussion about a free gold price api with no key"
-    )
-
-    assert any("site:reddit.com" in variant for variant in variants), variants
-
-
-def test_pre_crawl_reranker_demotes_generic_homepages():
-    tool = Tools()
-    query = "free gold price api no key historical data"
-
-    candidates = [
-        tool._build_candidate(
-            "https://broker.example/",
-            title="Broker Example Home",
-            snippet="Enterprise trading platform pricing and brokerage accounts.",
-            search_rank=1,
-            retrieved_by_queries=[query],
-        ),
-        tool._build_candidate(
-            "https://docs.gold.example/api/historical",
-            title="Free gold price API historical endpoint",
-            snippet="Historical gold prices with JSON output and no API key.",
-            search_rank=4,
-            retrieved_by_queries=[query],
-        ),
-        tool._build_candidate(
-            "https://vendor.example/pricing",
-            title="Gold API pricing",
-            snippet="Plans, signup, and paid tiers for commodity market data.",
-            search_rank=2,
-            retrieved_by_queries=[query],
-        ),
-    ]
-
-    for candidate in candidates:
-        candidate["pre_crawl_score"] = tool._score_search_candidate(candidate, query)
-
-    ranked = tool._rank_candidates(candidates, max_per_domain=3)
-
-    assert ranked[0]["url"] == "https://docs.gold.example/api/historical", ranked
-    assert ranked[-1]["url"] == "https://broker.example/", ranked
-
-
-def test_search_and_crawl_uses_multi_query_reranking(monkeypatch):
-    async def scenario():
-        tool = Tools()
-        tool._cache.enabled = False
-        seen_queries = []
-        crawl_calls = []
-
-        async def fake_search(query_variant, __event_emitter__=None):
-            seen_queries.append(query_variant)
-            results = [
-                tool._build_candidate(
-                    "https://broker.example/",
-                    title="Broker Example Home",
-                    snippet="Trade commodities with enterprise plans and market access.",
-                    search_rank=1,
-                    retrieved_by_queries=[query_variant],
-                ),
-                tool._build_candidate(
-                    "https://techtarget.example/definition/gold-api",
-                    title="What is a gold API?",
-                    snippet="Generic explanation of market data feeds for enterprises.",
-                    search_rank=2,
-                    retrieved_by_queries=[query_variant],
-                ),
-                tool._build_candidate(
-                    "https://docs.gold.example/api/historical",
-                    title="Free gold price API historical endpoint",
-                    snippet="Historical gold prices with JSON output and no API key.",
-                    search_rank=3,
-                    retrieved_by_queries=[query_variant],
-                ),
-                tool._build_candidate(
-                    "https://vendor.example/pricing",
-                    title="Gold API pricing",
-                    snippet="Plans, signup, and paid tiers for commodity market data.",
-                    search_rank=4,
-                    retrieved_by_queries=[query_variant],
-                ),
-                tool._build_candidate(
-                    "https://github.example/open-gold-api",
-                    title="Open gold API historical dataset",
-                    snippet="Free historical gold data and sample endpoints without auth.",
-                    search_rank=5,
-                    retrieved_by_queries=[query_variant],
-                ),
-            ]
-            if "free gold price api no key historical data" != query_variant:
-                results = results[1:] + [
-                    tool._build_candidate(
-                        "https://docs.gold.example/api/quickstart",
-                        title="Gold API quickstart and historical guide",
-                        snippet="Quickstart for free historical gold API requests with JSON examples.",
-                        search_rank=2,
-                        retrieved_by_queries=[query_variant],
-                    )
-                ]
-            return results
-
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            crawl_calls.extend(urls)
-            page_bodies = {
-                "https://broker.example/": (
-                    "Broker Example",
-                    "# Broker Example\n\nEnterprise brokerage homepage with pricing, accounts, and trading tools.",
-                ),
-                "https://techtarget.example/definition/gold-api": (
-                    "What is a gold API?",
-                    "# What is a gold API?\n\nA short definition of market data APIs for enterprises.",
-                ),
-                "https://docs.gold.example/api/historical": (
-                    "Free gold price API historical endpoint",
-                    "# Historical endpoint\n\nThis endpoint returns historical gold prices in JSON and does not require an API key. "
-                    "Free access includes time series data, historical daily values, and simple REST examples."
-                    "\n\n## Example\n\nGET /historical?symbol=XAUUSD",
-                ),
-                "https://vendor.example/pricing": (
-                    "Gold API pricing",
-                    "# Pricing\n\nContact sales for enterprise pricing.",
-                ),
-                "https://github.example/open-gold-api": (
-                    "Open gold API historical dataset",
-                    "# Open gold API\n\nA free historical gold dataset with example endpoints and no auth requirement."
-                    "\n\nThe repository documents CSV downloads, JSON mirrors, and sample integrations.",
-                ),
-                "https://docs.gold.example/api/quickstart": (
-                    "Gold API quickstart and historical guide",
-                    "# Quickstart\n\nFree historical gold API examples, quickstart steps, and endpoint documentation.",
-                ),
-            }
-            results = []
-            for url in urls:
-                title, content = page_bodies[url]
-                page_id = tool._page_store.put(url, title, content)
-                compact = tool._build_compact_summary(content, query or "")
-                results.append(
-                    {
-                        "url": url,
-                        "title": title,
-                        "page_id": page_id,
-                        "summary": compact["summary"],
-                        "key_points": compact["key_points"],
-                        "content_length": len(content),
-                        "images": [],
-                        "content_type": "html",
-                        "_content": content,
-                    }
-                )
-            return {"content": results, "images": []}
-
-        monkeypatch.setattr(tool, "_search_searxng", fake_search)
-        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
-
-        results = await tool.search_and_crawl(
-            query="free gold price api no key historical data",
-            depth="quick",
-            max_results=2,
-            fresh=True,
-        )
-
-        assert isinstance(results, list), results
-        assert len(results) == 2, results
-        assert len(seen_queries) >= 2, seen_queries
-        assert not any("site:reddit.com" in query for query in seen_queries), (
-            seen_queries
-        )
-        assert len(crawl_calls) == 4, crawl_calls
-        assert "https://broker.example/" not in crawl_calls, crawl_calls
-
-        top_urls = [result["url"] for result in results]
-        assert "https://docs.gold.example/api/historical" in top_urls, results
-        assert any(
-            "github.example" in url or "quickstart" in url for url in top_urls
-        ), results
-
-        for result in results:
-            for key in (
-                "source_type",
-                "content_type",
-                "search_rank",
-                "search_snippet",
-                "pre_crawl_score",
-                "post_crawl_score",
-                "discovered_from",
-            ):
-                assert key in result, result
-            assert result["post_crawl_score"] >= result["pre_crawl_score"] * 0.2, result
-
-    asyncio.run(scenario())
-
-
-def test_search_and_crawl_honors_requested_max_results_above_default(monkeypatch):
-    async def scenario():
+def test_search_and_crawl_honors_requested_max_results_above_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
 
-        async def fake_search(query_variant, __event_emitter__=None):
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
             return [
                 tool._build_candidate(
                     f"https://docs{idx}.example/api/{idx}",
                     title=f"Historical gold API page {idx}",
                     snippet="Free historical gold API docs and examples without an API key.",
                     search_rank=idx,
-                    retrieved_by_queries=[query_variant],
                 )
                 for idx in range(1, 13)
             ]
 
-        async def fake_crawl(urls, query=None, timeout_s=None, __event_emitter__=None):
-            results = []
-            for url in urls:
-                idx = int(url.rsplit("/", 1)[-1])
-                content = (
-                    f"# Historical gold API page {idx}\n\n"
-                    "Free historical gold API docs, JSON examples, and endpoint notes without an API key."
-                )
-                page_id = tool._page_store.put(
-                    url, f"Historical gold API page {idx}", content
-                )
-                compact = tool._build_compact_summary(content, query or "")
-                results.append(
-                    {
-                        "url": url,
-                        "title": f"Historical gold API page {idx}",
-                        "page_id": page_id,
-                        "summary": compact["summary"],
-                        "key_points": compact["key_points"],
-                        "content_length": len(content),
-                        "images": [],
-                        "content_type": "html",
-                        "_content": content,
-                    }
-                )
-            return {"content": results, "images": []}
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
+            url = urls_to_fetch[0]
+            idx = int(url.rsplit("/", 1)[-1])
+            content = (
+                f"# Historical gold API page {idx}\n\n"
+                "Free historical gold API docs, JSON examples, and endpoint notes without an API key."
+            )
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        f"Historical gold API page {idx}",
+                        content,
+                        query or "",
+                    )
+                ],
+                "images": [],
+            }
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
@@ -940,34 +1400,37 @@ def test_search_and_crawl_honors_requested_max_results_above_default(monkeypatch
     asyncio.run(scenario())
 
 
-def test_crawl_url_handles_missing_status_code(monkeypatch):
+def test_crawl_url_handles_missing_status_code(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeResponse:
-        def __init__(self, payload):
+        def __init__(self, payload: dict[str, Any]):
             self.payload = payload
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeResponse":
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
             return False
 
-        def raise_for_status(self):
+        def raise_for_status(self) -> None:
             return None
 
-        async def json(self):
+        async def json(self) -> dict[str, Any]:
             return self.payload
 
     class FakeSession:
-        def __init__(self, *args, **kwargs):
-            pass
+        def __init__(self, *args: Any, **kwargs: Any):
+            _ = args, kwargs
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeSession":
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
             return False
 
-        def post(self, *args, **kwargs):
+        def post(self, *args: Any, **kwargs: Any) -> FakeResponse:
+            _ = args, kwargs
             return FakeResponse(
                 {
                     "results": [
@@ -980,11 +1443,11 @@ def test_crawl_url_handles_missing_status_code(monkeypatch):
                 }
             )
 
-    async def scenario():
+    async def scenario() -> None:
         tool = Tools()
-        negative_cache_keys = []
+        negative_cache_keys: list[tuple[str, int, str]] = []
 
-        async def fake_setex(key, ttl_s, value):
+        async def fake_setex(key: str, ttl_s: int, value: str) -> None:
             negative_cache_keys.append((key, ttl_s, value))
 
         monkeypatch.setattr(
@@ -1000,40 +1463,62 @@ def test_crawl_url_handles_missing_status_code(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_build_tools_syncs_cache_and_normalizes_searxng_runtime_overrides():
-    tool = build_tools(
-        valve_overrides={
-            "SEARXNG_BASE_URL": "http://search.example/search?lang=en",
-            "CACHE_REDIS_URL": "redis://cache.example:6379/9",
-            "CACHE_ENABLED": False,
-        }
-    )
+def test_crawl_url_handles_request_timeout_gracefully(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTimeoutSession:
+        def __init__(self, *args: Any, **kwargs: Any):
+            _ = args, kwargs
 
-    assert (
-        tool.valves.SEARXNG_BASE_URL
-        == "http://search.example/search?lang=en&format=json&q=<query>"
-    )
-    assert tool._cache.url == "redis://cache.example:6379/9"
-    assert tool._cache.enabled is False
-    assert tool._cache._redis is None
-    assert tool._cache._unavailable_until == 0.0
+        async def __aenter__(self) -> "FakeTimeoutSession":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
+            return False
+
+        def post(self, *args: Any, **kwargs: Any) -> Any:
+            _ = args, kwargs
+
+            class _TimeoutResponse:
+                async def __aenter__(self) -> Any:
+                    raise asyncio.TimeoutError()
+
+                async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+                    _ = exc_type, exc, tb
+                    return False
+
+            return _TimeoutResponse()
+
+    async def scenario() -> None:
+        tool = Tools()
+        dead_cache_writes: list[tuple[str, int, str]] = []
+        tool._active_query_metadata = tool._empty_query_metadata("gold api", "quick")
+
+        async def fake_setex(key: str, ttl_s: int, value: str) -> None:
+            dead_cache_writes.append((key, ttl_s, value))
+
+        monkeypatch.setattr(
+            "sourceweave_web_search.tool.aiohttp.ClientSession", FakeTimeoutSession
+        )
+        monkeypatch.setattr(tool._cache, "setex", fake_setex)
+
+        result = await tool._crawl_url(["https://bad.example/"], query="gold api")
+
+        assert result["error"] == "timeout", result
+        assert dead_cache_writes, dead_cache_writes
+        failed_urls = tool._active_query_metadata["crawl"]["failed_urls"]
+        assert failed_urls, tool._active_query_metadata
+        assert failed_urls[0]["url"] == "https://bad.example/", failed_urls
+        assert failed_urls[0]["reason"] == "timeout", failed_urls
+        assert failed_urls[0]["stage"] == "crawl_request", failed_urls
+
+    asyncio.run(scenario())
 
 
-def test_runtime_overrides_reset_cache_state_and_replace_fixed_searxng_query():
-    tool = Tools()
-    tool._cache._unavailable_until = 99.0
-
-    RuntimeOverrides(
-        valve_overrides={
-            "SEARXNG_BASE_URL": "http://search.example/search?q=stale&lang=en&format=html",
-        }
-    ).apply(tool)
-
-    assert (
-        tool.valves.SEARXNG_BASE_URL
-        == "http://search.example/search?q=<query>&lang=en&format=json"
-    )
-    assert tool._cache.url == tool.valves.CACHE_REDIS_URL
-    assert tool._cache.enabled is tool.valves.CACHE_ENABLED
-    assert tool._cache._redis is None
-    assert tool._cache._unavailable_until == 0.0
+def test_transient_failure_negative_ttls_are_shorter() -> None:
+    assert _negative_ttl("timeout") == 45
+    assert _negative_ttl("500") == 90
+    assert _negative_ttl("403") == 180
+    assert _negative_ttl("blocked") == 300
+    assert _negative_ttl("404") == 1800

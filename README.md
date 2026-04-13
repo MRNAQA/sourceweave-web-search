@@ -41,6 +41,7 @@ Repo-local helpers:
 - `artifacts/sourceweave_web_search.py`: checked-in standalone OpenWebUI artifact copied from `src/sourceweave_web_search/tool.py`
 - `docker-compose.yml`: root compose entrypoint with the `mcp` service and include-based dependency fragments
 - `infrastructure/*.yml`: per-service compose fragments for `redis`, `crawl4ai`, and `searxng`
+- `infrastructure/searxng-settings.yml`: tracked SearXNG tuning used by the local compose stack
 - `scripts/run_tool_call.py`: thin wrapper around the package CLI for the local harness workflow
 - `scripts/build_openwebui_tool.py`: thin wrapper that validates or regenerates the standalone OpenWebUI file from a repo checkout
 - `tests/`: local integration and packaging checks
@@ -54,6 +55,14 @@ The code under `src/` is the source of truth.
 - `artifacts/sourceweave_web_search.py` is a generated artifact checked into the repo.
 - `search_and_crawl` and batched `read_page` are exposed through both the CLI and MCP server.
 
+Current runtime behavior:
+
+- `search_and_crawl` makes one SearXNG request per query and preserves that search order.
+- Crawl4AI enriches HTML pages one URL at a time instead of batch-reranking results.
+- document conversion is explicit per URL via `{"url": "...pdf", "convert_document": true}`; document hits are not auto-converted from normal search results.
+- `search_and_crawl` stays lean and does not include related-link expansions in discovery results.
+- `read_page` returns stored full content plus state fields such as `content_type`, `source_type`, `content_source`, `full_content_available`, `focus_applied`, and `truncated`, and can include up to `related_links_limit` stored related links per page.
+
 From a repo checkout, verify artifact drift without rewriting the artifact:
 
 ```bash
@@ -66,6 +75,23 @@ After installing the package, call the CLI directly:
 
 ```bash
 sourceweave-search --query "python programming" --read-first-pages 2
+```
+
+Read a discovered page and include a capped number of stored related links:
+
+```bash
+sourceweave-search \
+  --query "react useEffect cleanup example" \
+  --read-first-page \
+  --related-links-limit 3
+```
+
+Force document conversion for an explicit URL:
+
+```bash
+sourceweave-search \
+  --query "guide pdf" \
+  --url '{"url": "https://example.com/guide.pdf", "convert_document": true}'
 ```
 
 Run the MCP server from the installed package:
@@ -109,7 +135,7 @@ That image only packages the Python service. You still need to provide reachable
 
 ## Repo-Local Setup
 
-Optionally copy `.env.example` to `.env` before starting the local stack. The compose fragments use pinned image tags and local-only placeholder secrets so you can override them without editing tracked files.
+Optionally copy `.env.example` to `.env` before starting the local stack. The compose fragments use pinned image tags and local-only placeholder secrets so you can override them without editing tracked files. The local SearXNG service also mounts the tracked `infrastructure/searxng-settings.yml` file so engine tuning lives in the repo instead of an anonymous container volume.
 
 ```bash
 cp .env.example .env
@@ -201,8 +227,9 @@ docker compose run --rm mcp uv run python tests/test_phase4.py
 
 `tests/test_tool.py` verifies the main tool contract:
 
-- `search_and_crawl(query=..., depth=...)` returns results with `page_id`
-- `read_page(page_ids=[...])` batches full content reads across one or more pages
+- `search_and_crawl(query=..., depth=...)` returns results with `page_id` plus content-state fields such as `content_type`, `source_type`, `content_source`, and `full_content_available`
+- `read_page(page_ids=[...])` batches full content reads across one or more pages, reports `focus_applied` / `truncated`, and returns up to `related_links_limit` stored related links per page
+- explicit per-URL document conversion works through the public tool contract
 - cached `page_id` lookups still work from a fresh `Tools()` instance
 
 `tests/test_phase4.py` keeps the lower-level Crawl4AI BM25 checks.
