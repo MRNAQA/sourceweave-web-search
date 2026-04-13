@@ -23,23 +23,8 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.ref }}
 
-      - name: Verify server.json version matches pyproject.toml
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import tomllib
-          from pathlib import Path
-
-          project_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
-          server_version = json.loads(Path("server.json").read_text())["version"]
-
-          if project_version != server_version:
-              raise SystemExit(
-                  f"server.json version {server_version!r} does not match pyproject.toml version {project_version!r}"
-              )
-          PY
+      - name: Check release metadata sync
+        run: python scripts/sync_release_metadata.py --check
 
       - name: Install mcp-publisher
         shell: bash

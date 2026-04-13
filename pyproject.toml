@@ -1,6 +1,6 @@
 [project]
 name = "sourceweave-web-search"
-version = "0.2.0"
+version = "0.2.1"
 description = "MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis"
 readme = "README.md"
 license = "MIT"
@@ -38,6 +38,7 @@ Issues = "https://github.com/MRNAQA/sourceweave-web-search/issues"
 sourceweave-search = "sourceweave_web_search.cli:main"
 sourceweave-search-mcp = "sourceweave_web_search.mcp_server:main"
 sourceweave-build-openwebui = "sourceweave_web_search.build_openwebui:main"
+sourceweave-sync-release-metadata = "sourceweave_web_search.release_metadata:main"
 
 [dependency-groups]
 dev = [

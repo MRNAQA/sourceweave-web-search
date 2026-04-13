@@ -18,6 +18,7 @@ on:
       - "infrastructure/**"
       - "pyproject.toml"
       - "scripts/build_openwebui_tool.py"
+      - "scripts/sync_release_metadata.py"
       - "artifacts/sourceweave_web_search.py"
       - "src/sourceweave_web_search/cli.py"
       - "src/sourceweave_web_search/config.py"
@@ -46,6 +47,7 @@ on:
       - "infrastructure/**"
       - "pyproject.toml"
       - "scripts/build_openwebui_tool.py"
+      - "scripts/sync_release_metadata.py"
       - "artifacts/sourceweave_web_search.py"
       - "src/sourceweave_web_search/cli.py"
       - "src/sourceweave_web_search/config.py"
@@ -83,6 +85,9 @@ jobs:
 
       - name: Check OpenWebUI artifact drift
         run: uv run sourceweave-build-openwebui --check
+
+      - name: Check release metadata sync
+        run: uv run python scripts/sync_release_metadata.py --check
 
       - name: Run lint checks
         run: uv run ruff check src tests

@@ -15,6 +15,7 @@ from sourceweave_web_search.build_openwebui import (
     default_output_path,
 )
 from sourceweave_web_search.mcp_server import build_mcp_server
+from sourceweave_web_search.release_metadata import project_version, server_json_path
 from sourceweave_web_search.tool import Tools
 
 
@@ -68,6 +69,19 @@ def test_openwebui_artifact_is_in_sync() -> None:
     assert artifact_path.read_text(encoding="utf-8") == artifact_before
     assert artifact_path.stat().st_mtime_ns == mtime_before
     assert artifact_before == canonical_tool_path().read_text(encoding="utf-8")
+
+
+def test_release_metadata_is_in_sync() -> None:
+    version = project_version()
+    tool_source = canonical_tool_path().read_text(encoding="utf-8")
+    server_json = server_json_path().read_text(encoding="utf-8")
+
+    assert f'version = "{version}"' in _repo_root().joinpath(
+        "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    assert f"version: {version}" in tool_source
+    assert f'"version": "{version}"' in server_json
+    assert f"ghcr.io/mrnaqa/sourceweave-web-search:{version}" in server_json
 
 
 def test_openwebui_build_check_reports_drift_and_recovers(tmp_path: Path) -> None:

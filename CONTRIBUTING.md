@@ -98,7 +98,7 @@ This repo includes a manual GitHub Actions workflow at `.github/workflows/releas
 
 Inputs:
 
-- `tag`: release tag, for example `v0.2.0`
+- `tag`: release tag, for example `vX.Y.Z`
 - `release_name`: optional GitHub release title
 - `target_ref`: branch or commit to release, usually `main`
 - `prerelease`: whether to mark the release as a prerelease
@@ -128,7 +128,7 @@ Example trigger from the CLI:
 ```bash
 gh workflow run release.yml \
   --ref main \
-  -f tag=v0.2.0 \
+  -f tag=vX.Y.Z \
   -f target_ref=main \
   -f prerelease=false \
   -f publish_pypi=true \

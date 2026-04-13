@@ -8,13 +8,13 @@
     "url": "https://github.com/MRNAQA/sourceweave-web-search",
     "source": "github"
   },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "sourceweave-web-search",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -39,7 +39,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/mrnaqa/sourceweave-web-search:0.2.0",
+      "identifier": "ghcr.io/mrnaqa/sourceweave-web-search:0.2.1",
       "runtimeHint": "docker",
       "transport": {
         "type": "streamable-http",
