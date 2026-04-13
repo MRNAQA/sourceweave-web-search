@@ -5,7 +5,7 @@ LABEL io.modelcontextprotocol.server.name="io.github.MRNAQA/sourceweave-web-sear
       org.opencontainers.image.description="MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis" \
       org.opencontainers.image.source="https://github.com/MRNAQA/sourceweave-web-search" \
       org.opencontainers.image.url="https://github.com/MRNAQA/sourceweave-web-search" \
-      org.opencontainers.image.version="0.2.1" \
+      org.opencontainers.image.version="0.2.2" \
       org.opencontainers.image.vendor="Mohammad ElNaqa" \
       org.opencontainers.image.licenses="MIT"
 

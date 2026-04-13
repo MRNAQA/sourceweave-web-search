@@ -3,7 +3,7 @@ title: SourceWeave Web Search
 description: AI web search tool with two explicit actions: search_web for source discovery and read_pages for full-page retrieval. Uses SearXNG for search, Crawl4AI for HTML extraction, and MarkItDown for document conversion.
 author: Mohammad ElNaqa
 author_url: https://github.com/MRNAQA
-version: 0.2.1
+version: 0.2.2
 license: MIT
 requirements: aiohttp, loguru, markitdown, redis>=5.0
 

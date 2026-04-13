@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- fix MCP Registry publishing by aligning the registry namespace with the GitHub OIDC publisher namespace
+- simplify `server.json` to the supported PyPI package metadata path for registry publication
+- make the release metadata sync script dependency-free so lightweight release workflows can run it before installing runtime dependencies
+- align the publishable MCP container name and OCI labels across Dockerfile, release automation, docs, and local compose
+
 ## 0.2.1
 
 - add direct URL support to `read_pages`, including explicit per-URL document conversion for direct reads
