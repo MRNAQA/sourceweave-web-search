@@ -2,7 +2,7 @@
 
 <!-- mcp-name: io.github.MRNAQA/sourceweave-web-search -->
 
-SourceWeave Web Search is an MCP server and CLI for search-first web research plus follow-up page reading.
+SourceWeave Web Search is a fully local MCP server and CLI for web research.
 
 It uses SearXNG for discovery, Crawl4AI for cleaned page extraction, and Redis or Valkey as the canonical persisted page cache.
 
@@ -15,7 +15,7 @@ For most users, the setup is simple:
 ## Key Features
 
 - MCP server with `stdio`, `sse`, and `streamable-http` transports
-- search-first source discovery plus batched page reading for MCP clients
+- fully local web research workflow with source discovery and batched page reading for MCP clients
 - explicit per-URL document conversion for PDFs and other supported documents
 - focused reads, direct URL reads, related-link limits, image metadata, and page-quality hints
 - publishable Python package, container image, and generated OpenWebUI artifact

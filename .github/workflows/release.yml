@@ -200,7 +200,7 @@ jobs:
           tags: ${{ steps.container_tags.outputs.tags }}
           labels: |
             org.opencontainers.image.title=sourceweave-web-search-mcp
-            org.opencontainers.image.description=MCP server and CLI for web search and page reading with SearXNG, Crawl4AI, and Redis
+            org.opencontainers.image.description=Fully local MCP server and CLI for web research
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.release_meta.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}

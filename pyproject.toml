@@ -1,7 +1,7 @@
 [project]
 name = "sourceweave-web-search"
 version = "0.2.3"
-description = "MCP server and CLI for search-first web research with batched page reading, focused extraction, and direct URL support"
+description = "Fully local MCP server and CLI for web research"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

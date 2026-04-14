@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MRNAQA/sourceweave-web-search",
-  "description": "MCP server and CLI for web research with source discovery, batched reads, focus, and direct URLs.",
+  "description": "Fully local MCP server and CLI for web research",
   "title": "SourceWeave Web Search",
   "websiteUrl": "https://github.com/MRNAQA/sourceweave-web-search",
   "repository": {
