@@ -188,10 +188,10 @@ def test_built_distributions_ship_publishable_metadata() -> None:
     )
 
     for repo_only_prefix in (
+        ".agents/",
         "artifacts/",
         "infrastructure/",
         "scripts/",
-        "skills/",
         "tests/",
     ):
         assert not any(name.startswith(repo_only_prefix) for name in wheel_names), (

@@ -84,7 +84,7 @@ The published wheel is intentionally lean. It does not include repo-only helpers
 - `infrastructure/`
 - `scripts/`
 - `tests/`
-- `skills/`
+- `.agents/skills/`
 - the checked-in OpenWebUI artifact under `artifacts/`
 
 `tests/test_packaging.py` verifies that:

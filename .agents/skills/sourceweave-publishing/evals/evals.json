@@ -1,0 +1,17 @@
+{
+  "skill_name": "sourceweave-publishing",
+  "evaluations": [
+    {
+      "prompt": "bump the version, update the changelog, and publish to pypi and ghcr",
+      "expected_behavior": "Bump pyproject.toml, sync release metadata, update CHANGELOG.md, verify the release surface, run release.yml with publish_pypi and publish_ghcr enabled, then verify the published package and GHCR manifest before recommending MCP Registry publish."
+    },
+    {
+      "prompt": "the pypi release failed with invalid-publisher, figure it out",
+      "expected_behavior": "Inspect the workflow identity from the failure, compare it to the expected trusted-publisher identity for MRNAQA/sourceweave-web-search and release.yml, explain the mismatch, and tell the user what to fix in PyPI."
+    },
+    {
+      "prompt": "publish this release everywhere and tell me the next command",
+      "expected_behavior": "Verify release readiness, run or instruct release.yml, confirm PyPI and GHCR artifacts, then give the publish-mcp-registry workflow command."
+    }
+  ]
+}

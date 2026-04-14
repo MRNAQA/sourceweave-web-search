@@ -1,0 +1,17 @@
+{
+  "skill_name": "sourceweave-search-tool-testing",
+  "evaluations": [
+    {
+      "prompt": "smoke test search_web and read_pages locally",
+      "expected_behavior": "Use the repo-local host defaults, verify the OpenWebUI artifact is in sync, run the package CLI, and report on search_web and read_pages behavior."
+    },
+    {
+      "prompt": "test a direct URL read",
+      "expected_behavior": "Use the explicit read path for a URL, distinguish HTML reads from document reads, and enforce convert_document for document URLs."
+    },
+    {
+      "prompt": "check the compose mcp defaults",
+      "expected_behavior": "Describe the container-network defaults only for the compose mcp service and keep them separate from host-side package defaults."
+    }
+  ]
+}
