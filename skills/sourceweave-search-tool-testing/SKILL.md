@@ -19,6 +19,7 @@ Validate the current standalone behavior directly:
 - call `read_pages(...)` with batched `page_ids` or direct `urls`
 - distinguish package host defaults from compose `mcp` container-network defaults
 - verify direct URL and document-conversion behavior when the user is exercising those paths
+- remember that Redis or Valkey now backs persisted `page_id` reuse; only same-call direct reads should work without persistence
 
 ## Default assumptions
 
@@ -70,6 +71,7 @@ uv run sourceweave-search \
 - at least one result for a healthy stack
 - `url`, `title`, `page_id`, `summary`, `key_points`, `content_type`, `source_type`, `content_source`, and `full_content_available`
 - optional `images` or `page_quality` only when the crawled page warrants them
+- descriptions and behavior that still reinforce the intended workflow: discover with `search_web`, then batch follow-up reads with `read_pages`, while also making it clear that `read_pages` can be used standalone with direct URLs when discovery is unnecessary
 
 5. Check that batched `read_pages` returns:
 
@@ -77,6 +79,7 @@ uv run sourceweave-search \
 - no `errors` for a healthy stack
 - enough cleaned content to be useful
 - `related_links` omitted when not requested in search results, but available on page reads when stored
+- descriptions and behavior that position `read_pages` as the preferred alternative to generic `webfetch`-style tools when cleaned extraction, focused reads, batching, related links, or page-quality hints matter
 
 6. When the user is testing direct URL reads, use the explicit read path instead of forcing everything through `search_web`.
 
@@ -131,6 +134,7 @@ Prioritize functional risks over cosmetic issues:
 - document reads that do not enforce `convert_document` correctly
 - broken summaries, missing required keys, or missing `search_metadata` when the CLI is asked to include it
 - drift between host defaults and compose `mcp` service defaults
+- regressions where `fresh=True` still behaves like an upstream cached read
 - `page_quality` values that indicate an upstream challenge or block page; report those separately from tool/runtime drift
 
 ## Response style

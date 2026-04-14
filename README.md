@@ -2,9 +2,9 @@
 
 <!-- mcp-name: io.github.MRNAQA/sourceweave-web-search -->
 
-SourceWeave Web Search is an MCP server and CLI for web search plus follow-up page reading.
+SourceWeave Web Search is an MCP server and CLI for search-first web research plus follow-up page reading.
 
-It uses SearXNG for search, Crawl4AI for HTML extraction, and Redis or Valkey for caching.
+It uses SearXNG for discovery, Crawl4AI for cleaned page extraction, and Redis or Valkey as the canonical persisted page cache.
 
 For most users, the setup is simple:
 
@@ -15,9 +15,9 @@ For most users, the setup is simple:
 ## Key Features
 
 - MCP server with `stdio`, `sse`, and `streamable-http` transports
-- lean search plus follow-up page reading for MCP clients
+- search-first source discovery plus batched page reading for MCP clients
 - explicit per-URL document conversion for PDFs and other supported documents
-- focused reads, related-link limits, image metadata, and page-quality hints
+- focused reads, direct URL reads, related-link limits, image metadata, and page-quality hints
 - publishable Python package, container image, and generated OpenWebUI artifact
 - compatible with OpenCode, VS Code Copilot, and other MCP clients
 
@@ -218,8 +218,9 @@ sourceweave-search-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 
 MCP clients receive a simple two-step flow:
 
-- a search step that returns compact results plus `page_id` handles
-- a follow-up page-read step that can read by `page_id` or direct URL and returns stored content, focused excerpts, related-link summaries, image metadata, and page-quality hints when relevant
+- `search_web`: discover relevant sources with compact summaries, key points, metadata, and stable `page_id` handles for follow-up work
+- `read_pages`: read by `page_id` after `search_web` or use it as a standalone direct-URL reader, batch related pages in one call, optionally focus the extraction, and retrieve stored related-link and page-quality context when useful
+
 
 Human operators usually only need to know how to run the server and where to point the runtime endpoints. MCP clients handle the exact tool parameters.
 

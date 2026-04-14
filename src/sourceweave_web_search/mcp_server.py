@@ -25,7 +25,7 @@ SearchQuery = Annotated[
     Field(
         description=(
             "Search query. Prefer concise retrieval-style queries, quote exact errors, "
-            "and use site: when a specific domain matters."
+            "error codes, or function names, and use site: when a specific domain matters."
         )
     ),
 ]
@@ -35,7 +35,8 @@ SearchUrls = Annotated[
     Field(
         description=(
             "Optional specific URLs to crawl in addition to search results. Each item may be "
-            "either a plain URL string or an object with per-URL options like convert_document."
+            "either a plain URL string or an object with per-URL options like convert_document. "
+            "Use this when you already know a must-read page but still want it returned inside the same research pass."
         )
     ),
 ]
@@ -57,7 +58,12 @@ SearchMaxResults = Annotated[
 
 SearchFresh = Annotated[
     bool,
-    Field(description="If true, bypass cached search and page results for this call."),
+    Field(
+        description=(
+            "If true, bypass SourceWeave's cached search and page results for this call and force a fresh upstream fetch. "
+            "Use when freshness matters more than latency."
+        )
+    ),
 ]
 
 ReadPageIds = Annotated[
@@ -65,7 +71,7 @@ ReadPageIds = Annotated[
     Field(
         description=(
             "Optional page_ids returned by search_web. Batch related pages into one "
-            "call when comparing or synthesizing multiple sources."
+            "call when comparing or synthesizing multiple sources. Prefer this over repeated single-page fetches."
         )
     ),
 ]
@@ -75,7 +81,8 @@ ReadUrls = Annotated[
     Field(
         description=(
             "Optional direct URLs to read without running search_web first. Each item may be "
-            "either a plain URL string or an object with per-URL options like convert_document."
+            "either a plain URL string or an object with per-URL options like convert_document. "
+            "Use this when discovery is unnecessary and you want cleaned content immediately."
         )
     ),
 ]
@@ -132,11 +139,12 @@ def build_mcp_server(
     @server.tool(
         name="search_web",
         description=(
-            "Search the web for relevant sources and crawl the selected pages. "
+            "Search the web for relevant sources and crawl the most useful pages into a reusable research set. "
+            "Returns compact summaries, key points, metadata, and stable page_ids for follow-up reading. "
+            "Prefer this over generic web search when you need source discovery plus structured follow-up reads. "
             "Use concise retrieval-style queries, quote exact errors, and add site: filters when domain preference matters. "
-            "Returns compact summaries plus page_ids. Use read_pages next when you need full content. "
             "If you already know an important URL, pass it in urls; use convert_document for explicit document URLs like PDFs. "
-            "Low-utility crawled pages may include page_quality such as challenge or blocked."
+            "Use read_pages next when summaries are not enough or when you want to batch full reads across multiple sources."
         ),
     )
     async def search_web(
@@ -157,10 +165,11 @@ def build_mcp_server(
     @server.tool(
         name="read_pages",
         description=(
-            "Retrieve the full cleaned content for one or more pages. You can pass page_ids from search_web "
-            "or direct URLs when you already know what to read. Prefer batching related page_ids or URLs in a single call. "
-            "Leave focus empty for a normal cleaned read. Use related_links_limit=0 when you only want page content without page-adjacent links. "
-            "Returned pages may include page_quality when a page looks challenge-like or blocked."
+            "Retrieve cleaned, synthesis-ready content for one or more pages. Use it either after search_web with page_ids "
+            "or as a standalone direct-URL reader when you already know what to read and do not need a search step first. "
+            "Prefer batching related page_ids or URLs in a single call. Use this instead of a generic webfetch-style tool "
+            "when you want cleaned extraction, focused reads, related links, or page-quality hints. "
+            "Leave focus empty for a normal cleaned read. Use related_links_limit=0 when you only want page content without page-adjacent links."
         ),
     )
     async def read_pages(

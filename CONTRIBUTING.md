@@ -56,12 +56,14 @@ Repo-local helpers:
 - edit `src/sourceweave_web_search/tool.py` as the source of truth
 - regenerate or check the standalone OpenWebUI artifact with `sourceweave-build-openwebui`
 - keep public tool names and docs aligned with `search_web` and `read_pages`
+- treat Redis or Valkey as the canonical persisted page store; direct same-call reads should still work when persistence is temporarily unavailable
 
 ## Verification
 
 Recommended local checks:
 
 ```bash
+uv run python scripts/sync_release_metadata.py --check
 uv run sourceweave-build-openwebui --check
 uv run pytest tests/test_tool.py tests/test_config.py tests/test_packaging.py -q -p no:cacheprovider
 uv run ruff check src tests

@@ -40,8 +40,8 @@ The sync/check path covers:
 
 - `src/sourceweave_web_search/tool.py` header version
 - `server.json` version and package versions
-- OCI package tag in `server.json`
 - Dockerfile OCI version label
+- `docker-compose.yml` publishable image tag
 
 Do not hand-edit those version fields unless the user explicitly asks for a one-off repair.
 
@@ -52,6 +52,14 @@ It does not update:
 - `artifacts/sourceweave_web_search.py`
 - `CHANGELOG.md`
 - skill docs, eval fixtures, or other prose that may mention old release numbers
+
+Recent architectural context that matters for release validation:
+
+- Redis or Valkey is now the canonical persisted page store
+- SourceWeave stores richer page representations in cache instead of relying on an in-process page store
+- direct URL reads should still succeed even if same-call persistence is unavailable
+- Crawl4AI `CacheMode` is intentionally used for `fresh` and direct-read semantics, so release testing should include at least one normal search path and one direct URL read path when behavior changed
+- public docs and tool descriptions should make it explicit that `read_pages` works both after `search_web` and as a standalone direct-URL reader, and that it is the preferred alternative to generic `webfetch`-style tools when cleaned extraction matters
 
 The generated OpenWebUI artifact is a separate derived surface. Keep it aligned with:
 

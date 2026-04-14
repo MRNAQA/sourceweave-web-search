@@ -11,7 +11,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from sourceweave_web_search.tool import Tools, _negative_ttl
+from sourceweave_web_search.tool import (
+    Tools,
+    _crawler_config_payload,
+    _markdown_content_variants,
+    _negative_ttl,
+)
 
 
 def _repo_root() -> Path:
@@ -52,18 +57,9 @@ def _make_crawl_result(
     related_links: list[dict[str, str]] | None = None,
     related_links_total: int = 0,
     images: list[dict[str, str]] | None = None,
+    source_type: str = "search_result",
 ) -> dict[str, Any]:
-    page_id = tool._page_store.put(
-        url,
-        title,
-        content,
-        content_type=content_type,
-        content_source=content_source,
-        full_content_available=full_content_available,
-        related_links=related_links,
-        related_links_total=related_links_total,
-        images=images,
-    )
+    page_id = Tools._page_id_for_url(url)
     compact = tool._build_compact_summary(content, query)
     return {
         "url": url,
@@ -74,12 +70,51 @@ def _make_crawl_result(
         "content_length": len(content),
         "images": list(images or []),
         "content_type": content_type,
+        "source_type": source_type,
         "content_source": content_source,
         "full_content_available": full_content_available,
         "related_links": list(related_links or []),
         "related_links_total": related_links_total,
+        "representations": {
+            "fit_markdown": content,
+            "raw_markdown": content,
+            "html": "",
+        },
         "_content": content,
     }
+
+
+async def _store_test_page(
+    tool: Tools,
+    url: str,
+    title: str,
+    content: str,
+    *,
+    content_type: str = "html",
+    source_type: str = "search_result",
+    content_source: str = "crawled_page",
+    full_content_available: bool = True,
+    related_links: list[dict[str, str]] | None = None,
+    related_links_total: int = 0,
+    images: list[dict[str, str]] | None = None,
+) -> str:
+    return await tool._store_page_record(
+        url,
+        title,
+        content,
+        content_type=content_type,
+        source_type=source_type,
+        content_source=content_source,
+        full_content_available=full_content_available,
+        related_links=related_links,
+        related_links_total=related_links_total,
+        images=images,
+        representations={
+            "fit_markdown": content,
+            "raw_markdown": content,
+            "html": "",
+        },
+    )
 
 
 @pytest.mark.integration
@@ -143,12 +178,14 @@ def test_read_pages_works_from_fresh_tool_instance() -> None:
 def test_read_pages_accepts_multiple_page_ids_in_one_call() -> None:
     async def scenario() -> None:
         tool = Tools()
-        first_page_id = tool._page_store.put(
+        first_page_id = await _store_test_page(
+            tool,
             "https://example.com/alpha",
             "Alpha",
             "# Alpha\n\nAlpha content paragraph with enough text to be useful for a multi-page read.",
         )
-        second_page_id = tool._page_store.put(
+        second_page_id = await _store_test_page(
+            tool,
             "https://example.com/beta",
             "Beta",
             "# Beta\n\nBeta content paragraph with enough text to be useful for a multi-page read.",
@@ -182,9 +219,11 @@ def test_read_pages_accepts_direct_url_without_search(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, source_type, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             return {
                 "content": [
@@ -222,9 +261,10 @@ def test_read_pages_accepts_direct_document_url_with_conversion(
             url: str,
             query: str = "",
             timeout_s: float | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, source_type, __event_emitter__
             fetch_calls.append(url)
             return _make_crawl_result(
                 tool,
@@ -272,7 +312,8 @@ def test_read_pages_requires_convert_document_for_direct_document_urls() -> None
 def test_read_pages_multi_returns_partial_errors_for_missing_ids() -> None:
     async def scenario() -> None:
         tool = Tools()
-        first_page_id = tool._page_store.put(
+        first_page_id = await _store_test_page(
+            tool,
             "https://example.com/gamma",
             "Gamma",
             "# Gamma\n\nGamma content paragraph with enough text to survive truncation.",
@@ -296,7 +337,8 @@ def test_read_pages_multi_returns_partial_errors_for_missing_ids() -> None:
 def test_read_pages_returns_content_state_and_related_assets() -> None:
     async def scenario() -> None:
         tool = Tools()
-        page_id = tool._page_store.put(
+        page_id = await _store_test_page(
+            tool,
             "https://example.com/guide",
             "Guide",
             "# Guide\n\nThis section explains the guide in detail.\n\n"
@@ -343,7 +385,6 @@ def test_read_pages_returns_content_state_and_related_assets() -> None:
 def test_search_web_and_read_pages_mark_challenge_pages() -> None:
     async def scenario() -> None:
         tool = Tools()
-        tool._cache.enabled = False
         url = "https://www.reddit.com/r/reactjs/comments/example"
 
         async def fake_search(
@@ -363,9 +404,11 @@ def test_search_web_and_read_pages_mark_challenge_pages() -> None:
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             assert urls_to_fetch == [url]
             return {
                 "content": [
@@ -375,11 +418,13 @@ def test_search_web_and_read_pages_mark_challenge_pages() -> None:
                         "Reddit - Prove your humanity",
                         "# Prove your humanity\n\nWe are committed to safety and security. But not for bots. Complete the challenge below and let us know you are a real person.",
                         query or "",
+                        source_type=source_type,
                     )
                 ]
             }
 
         monkeypatch = pytest.MonkeyPatch()
+        _install_memory_cache(monkeypatch, tool)
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
@@ -403,7 +448,8 @@ def test_search_web_and_read_pages_mark_challenge_pages() -> None:
 def test_read_pages_marks_blocked_pages() -> None:
     async def scenario() -> None:
         tool = Tools()
-        page_id = tool._page_store.put(
+        page_id = await _store_test_page(
+            tool,
             "https://example.com/blocked",
             "Access denied",
             "Access denied. You do not have permission to access this resource. Error code: 1020.",
@@ -484,9 +530,11 @@ def test_explicit_urls_preserve_input_order_ahead_of_search_results(
             urls: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             page_bodies = {
                 explicit_urls[0]: (
                     "Python Tutorial",
@@ -503,7 +551,13 @@ def test_explicit_urls_preserve_input_order_ahead_of_search_results(
             }
             return {
                 "content": [
-                    _make_crawl_result(tool, url, *page_bodies[url], query or "")
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        *page_bodies[url],
+                        query or "",
+                        source_type=source_type,
+                    )
                     for url in urls
                 ],
                 "images": [],
@@ -554,9 +608,11 @@ def test_explicit_url_failure_returns_search_only_fallback(
             urls: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, source_type, __event_emitter__
             results = []
             if search_url in urls:
                 results.append(
@@ -649,9 +705,11 @@ def test_search_web_uses_single_search_call_and_preserves_order(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             url = urls_to_fetch[0]
             idx = urls.index(url) + 1
             return {
@@ -662,6 +720,7 @@ def test_search_web_uses_single_search_call_and_preserves_order(
                         f"Crawled {idx}",
                         f"# Crawled {idx}\n\nUseful crawled content for result {idx}.",
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],
@@ -715,9 +774,11 @@ def test_search_web_fetches_html_pages_one_by_one(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             url = urls_to_fetch[0]
             return {
@@ -728,6 +789,7 @@ def test_search_web_fetches_html_pages_one_by_one(
                         "React Effect Docs",
                         "# React Effect Docs\n\nOfficial cleanup documentation example.",
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],
@@ -774,9 +836,18 @@ def test_search_web_falls_back_to_search_snippet_when_crawl_fails(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = urls_to_fetch, query, timeout_s, __event_emitter__
+            _ = (
+                urls_to_fetch,
+                query,
+                timeout_s,
+                cache_mode,
+                source_type,
+                __event_emitter__,
+            )
             return {"error": "timeout", "details": "timeout"}
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
@@ -832,9 +903,11 @@ def test_search_web_records_metadata_for_per_url_failures(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             url = urls_to_fetch[0]
             if url == second_url:
                 if tool._active_query_metadata is not None:
@@ -854,6 +927,7 @@ def test_search_web_records_metadata_for_per_url_failures(
                         "useEffect - React",
                         "# useEffect\n\nOfficial React documentation covering cleanup behavior.",
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],
@@ -913,9 +987,11 @@ def test_search_web_reuses_cached_crawled_page_record(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             return {
                 "content": [
@@ -925,6 +1001,7 @@ def test_search_web_reuses_cached_crawled_page_record(
                         "useEffect - React",
                         "# useEffect\n\nFull page content saved during search_web.",
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],
@@ -986,9 +1063,11 @@ def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, source_type, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             return {"error": "timeout", "details": "timeout"}
 
@@ -1009,9 +1088,11 @@ def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             return {
                 "content": [
@@ -1021,6 +1102,7 @@ def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
                         "useEffect - React",
                         "# useEffect\n\nNow we have real crawled page content.",
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],
@@ -1063,11 +1145,12 @@ def test_search_web_can_convert_documents_per_explicit_url(
             url: str,
             query: str = "",
             timeout_s: float | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
             _ = query, timeout_s, __event_emitter__
             fetch_calls.append(url)
-            return _make_crawl_result(
+            result = _make_crawl_result(
                 tool,
                 url,
                 "Guide PDF",
@@ -1075,15 +1158,19 @@ def test_search_web_can_convert_documents_per_explicit_url(
                 "guide pdf",
                 content_type="document",
                 content_source="converted_document",
+                source_type=source_type,
             )
+            return result
 
         async def fake_crawl(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = query, timeout_s, __event_emitter__
+            _ = query, timeout_s, cache_mode, source_type, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             return {"content": [], "images": []}
 
@@ -1135,9 +1222,10 @@ def test_search_web_does_not_auto_convert_documents(
             url: str,
             query: str = "",
             timeout_s: float | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any] | None:
-            _ = query, timeout_s, __event_emitter__
+            _ = query, timeout_s, source_type, __event_emitter__
             fetch_calls.append(url)
             return None
 
@@ -1164,7 +1252,7 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
 ) -> None:
     async def scenario() -> None:
         tool = Tools()
-        tool._cache.enabled = False
+        _install_memory_cache(monkeypatch, tool)
         url = "https://example.com/guide"
         related_links = [
             {"url": "https://example.com/related-a", "text": "Related A"},
@@ -1189,9 +1277,11 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             return {
                 "content": [
                     _make_crawl_result(
@@ -1203,6 +1293,7 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
                         related_links=related_links,
                         related_links_total=7,
                         images=images,
+                        source_type=source_type,
                     )
                 ],
                 "images": images,
@@ -1239,7 +1330,7 @@ def test_read_pages_reuse_content_from_initial_crawl(
 ) -> None:
     async def scenario() -> None:
         tool = Tools()
-        tool._cache.enabled = False
+        _install_memory_cache(monkeypatch, tool)
         search_url = "https://react.dev/reference/react/useEffect"
         crawl_calls: list[list[str]] = []
 
@@ -1260,9 +1351,11 @@ def test_read_pages_reuse_content_from_initial_crawl(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             crawl_calls.append(list(urls_to_fetch))
             return {
                 "content": [
@@ -1272,6 +1365,7 @@ def test_read_pages_reuse_content_from_initial_crawl(
                         "useEffect - React",
                         "# useEffect\n\nFull page content saved during search_web.",
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],
@@ -1297,6 +1391,166 @@ def test_read_pages_reuse_content_from_initial_crawl(
         ), pages
         assert pages["pages"][0]["content_source"] == "crawled_page", pages
         assert pages["pages"][0]["full_content_available"] is True, pages
+
+    asyncio.run(scenario())
+
+
+def test_markdown_content_variants_prefer_fit_markdown_with_links_preserved() -> None:
+    page_content, summary_content = _markdown_content_variants(
+        {
+            "fit_markdown": "# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
+            "raw_markdown": "# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
+        }
+    )
+
+    assert "[Warehouse documentation]" in page_content
+    assert summary_content == page_content
+
+
+def test_crawler_config_preserves_links_in_markdown_output() -> None:
+    tool = Tools()
+    payload = _crawler_config_payload(tool)
+    markdown_options = payload["params"]["markdown_generator"]["params"]["options"][
+        "value"
+    ]
+
+    assert markdown_options["ignore_links"] is False
+    assert "exclude_external_links" not in payload["params"]
+
+
+def test_crawl_url_stores_fit_markdown_with_links_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __init__(self, payload: dict[str, Any]):
+            self._payload = payload
+
+        async def __aenter__(self) -> "FakeResponse":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class FakeSession:
+        def __init__(self, *args: Any, **kwargs: Any):
+            _ = args, kwargs
+
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
+            return False
+
+        def post(self, *args: Any, **kwargs: Any) -> FakeResponse:
+            _ = args, kwargs
+            return FakeResponse(
+                {
+                    "results": [
+                        {
+                            "url": "https://docs.pypi.org/",
+                            "success": True,
+                            "status_code": 200,
+                            "metadata": {"title": "PyPI Docs"},
+                            "markdown": {
+                                "fit_markdown": "# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
+                                "raw_markdown": "[ Skip to content ](https://docs.pypi.org/#welcome-to-pypi-user-documentation)\n\n# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
+                            },
+                            "links": {"internal": [], "external": []},
+                            "media": {},
+                        }
+                    ]
+                }
+            )
+
+    async def scenario() -> None:
+        tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
+        monkeypatch.setattr(
+            "sourceweave_web_search.tool.aiohttp.ClientSession", FakeSession
+        )
+
+        result = await tool._crawl_url(["https://docs.pypi.org/"], query="pypi docs")
+
+        assert result["content"][0]["summary"].startswith(
+            "To view the developer documentation, visit the"
+        )
+        assert "Skip to content" not in result["content"][0]["summary"]
+        page = await tool.read_pages(result["content"][0]["page_id"], max_chars=500)
+        assert "[Warehouse documentation]" in page["content"], page
+        assert "Skip to content" not in page["content"], page
+
+    asyncio.run(scenario())
+
+
+def test_read_pages_direct_url_ignores_legacy_page_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        url = "https://docs.pypi.org/"
+        legacy_key = f"sc:page:{__import__('hashlib').md5(Tools._canonicalize_url(url).encode()).hexdigest()}"
+        cached_values = {
+            legacy_key: json.dumps(
+                {
+                    "url": url,
+                    "title": "PyPI Docs",
+                    "content": "# Legacy\n\nTo view the developer documentation, visit the",
+                    "content_type": "html",
+                    "content_source": "crawled_page",
+                    "full_content_available": True,
+                    "related_links": [],
+                    "related_links_total": 0,
+                    "images": [],
+                }
+            )
+        }
+        crawl_calls: list[list[str]] = []
+
+        async def fake_get(key: str) -> str | None:
+            return cached_values.get(key)
+
+        async def fake_setex(key: str, ttl_s: int, value: str) -> None:
+            _ = ttl_s
+            cached_values[key] = value
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = query, timeout_s, cache_mode, source_type, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        "PyPI Docs",
+                        "# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
+                        "pypi docs",
+                    )
+                ]
+            }
+
+        monkeypatch.setattr(tool._cache, "get", fake_get)
+        monkeypatch.setattr(tool._cache, "setex", fake_setex)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        page = await tool.read_pages(urls=[url], max_chars=500)
+
+        assert crawl_calls == [[url]], crawl_calls
+        assert "[Warehouse documentation]" in page["content"], page
 
     asyncio.run(scenario())
 
@@ -1493,9 +1747,11 @@ def test_search_web_honors_requested_max_results_above_default(
             urls_to_fetch: list[str],
             query: str | None = None,
             timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, __event_emitter__
+            _ = timeout_s, cache_mode, __event_emitter__
             url = urls_to_fetch[0]
             idx = int(url.rsplit("/", 1)[-1])
             content = (
@@ -1510,6 +1766,7 @@ def test_search_web_honors_requested_max_results_above_default(
                         f"Historical gold API page {idx}",
                         content,
                         query or "",
+                        source_type=source_type,
                     )
                 ],
                 "images": [],

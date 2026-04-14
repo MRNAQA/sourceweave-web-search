@@ -1,17 +1,17 @@
 """
 title: SourceWeave Web Search
-description: AI web search tool with two explicit actions: search_web for source discovery and read_pages for full-page retrieval. Uses SearXNG for search, Crawl4AI for HTML extraction, and MarkItDown for document conversion.
+description: Search-first web research tool with compact source discovery in search_web and cleaned batched page retrieval in read_pages. Uses SearXNG for discovery, Crawl4AI for extraction, and MarkItDown for document conversion.
 author: Mohammad ElNaqa
 author_url: https://github.com/MRNAQA
-version: 0.2.2
+version: 0.2.3
 license: MIT
 requirements: aiohttp, loguru, markitdown, redis>=5.0
 
 Two-tool architecture:
-    search_web(query, depth) -> compact summaries + page_ids (token-cheap discovery)
-    read_pages(page_ids, focus?) -> full page content for one or more pages (batch related reads when needed)
+    search_web(query, depth) -> compact summaries + page_ids for source discovery
+    read_pages(page_ids, focus?) -> cleaned page content for one or more pages (batch related reads when needed)
 
-Full content is stored in an in-process PageStore and cached in Valkey/Redis.
+Full content is cached in Valkey/Redis, which acts as the canonical page store.
 SearXNG defines search ordering; Crawl4AI enriches results in place without reranking.
 BM25-style extraction is used only for compact summaries and focused reads.
 Supports HTML pages (via Crawl4AI) and documents (PDF/DOCX/etc via MarkItDown).
@@ -53,6 +53,7 @@ _TTL_RULES = [
     ("reuters.", 600),
 ]
 _DEFAULT_PAGE_TTL = 86400
+_PAGE_CACHE_VERSION = "v5"
 _SEARXNG_HOST_FALLBACK = "http://127.0.0.1:19080/search?format=json&q=<query>"
 _CRAWL4AI_HOST_FALLBACK = "http://127.0.0.1:19235"
 _REDIS_HOST_FALLBACK = "redis://127.0.0.1:16379/2"
@@ -144,7 +145,18 @@ def _browser_config_payload() -> dict[str, Any]:
     }
 
 
-def _crawler_config_payload(tool: "Tools") -> dict[str, Any]:
+def _crawl4ai_cache_mode_param(cache_mode: str) -> dict[str, Any] | None:
+    normalized = str(cache_mode or "").strip().lower()
+    if normalized in ("", "bypass"):
+        return None
+    if normalized not in {"enabled", "read_only", "write_only", "disabled"}:
+        raise ValueError(f"Unsupported Crawl4AI cache mode: {cache_mode!r}")
+    return {"type": "CacheMode", "params": normalized}
+
+
+def _crawler_config_payload(
+    tool: "Tools", *, cache_mode: str = "enabled"
+) -> dict[str, Any]:
     params: dict[str, Any] = {
         "word_count_threshold": tool.valves.CRAWL4AI_WORD_COUNT_THRESHOLD,
         "markdown_generator": {
@@ -157,7 +169,7 @@ def _crawler_config_payload(tool: "Tools") -> dict[str, Any]:
                 "options": {
                     "type": "dict",
                     "value": {
-                        "ignore_links": True,
+                        "ignore_links": False,
                         "escape_html": False,
                         "body_width": 80,
                     },
@@ -175,6 +187,10 @@ def _crawler_config_payload(tool: "Tools") -> dict[str, Any]:
         "user_agent": tool.valves.CRAWL4AI_USER_AGENT,
     }
 
+    cache_mode_param = _crawl4ai_cache_mode_param(cache_mode)
+    if cache_mode_param is not None:
+        params["cache_mode"] = cache_mode_param
+
     exclude_social_media_domains = [
         domain.strip()
         for domain in tool.valves.CRAWL4AI_EXCLUDE_SOCIAL_MEDIA_DOMAINS.split(",")
@@ -191,8 +207,6 @@ def _crawler_config_payload(tool: "Tools") -> dict[str, Any]:
     if exclude_domains:
         params["exclude_domains"] = exclude_domains
 
-    if not tool.valves.CRAWL4AI_EXTERNAL_DOMAINS:
-        params["exclude_external_links"] = True
     if tool.valves.CRAWL4AI_TEXT_ONLY:
         params["only_text"] = True
     if tool.valves.CRAWL4AI_TIMEOUT != 60:
@@ -206,6 +220,17 @@ def _crawler_config_payload(tool: "Tools") -> dict[str, Any]:
         "type": "CrawlerRunConfig",
         "params": params,
     }
+
+
+def _markdown_content_variants(markdown_data: Any) -> tuple[str, str]:
+    if isinstance(markdown_data, dict):
+        fit_markdown = str(markdown_data.get("fit_markdown", "") or "")
+        raw_markdown = str(markdown_data.get("raw_markdown", "") or "")
+        preferred_content = fit_markdown or raw_markdown
+        return preferred_content, preferred_content
+
+    content = str(markdown_data or "")
+    return content, content
 
 
 class _CacheClient:
@@ -283,66 +308,6 @@ class _CacheClient:
             return bool(await asyncio.wait_for(client.exists(key), timeout=0.2))
         except Exception:
             return False
-
-
-class _PageStore:
-    def __init__(self, max_pages=200, ttl_s=1800):
-        import collections
-
-        self._store = collections.OrderedDict()
-        self._url_to_id = {}
-        self.max_pages = max_pages
-        self.ttl = ttl_s
-
-    def put(
-        self,
-        url: str,
-        title: str,
-        full_markdown: str,
-        *,
-        content_type: str = "html",
-        source_type: str = "search_result",
-        content_source: str = "crawled_page",
-        full_content_available: bool = True,
-        related_links: Optional[list[dict[str, str]]] = None,
-        related_links_total: int = 0,
-        images: Optional[list[dict[str, str]]] = None,
-    ) -> str:
-        canonical = Tools._canonicalize_url(url)
-        page_id = (
-            self._url_to_id.get(canonical)
-            or hashlib.md5(canonical.encode()).hexdigest()[:10]
-        )
-        record = {
-            "url": url,
-            "title": title,
-            "content": full_markdown,
-            "content_type": content_type,
-            "source_type": source_type,
-            "content_source": content_source,
-            "full_content_available": full_content_available,
-            "related_links": list(related_links or []),
-            "related_links_total": int(related_links_total or 0),
-            "images": list(images or []),
-        }
-        while len(self._store) >= self.max_pages:
-            _, (_, evicted_record) = self._store.popitem(last=False)
-            evicted_canonical = Tools._canonicalize_url(evicted_record["url"])
-            self._url_to_id.pop(evicted_canonical, None)
-        self._store[page_id] = (time.monotonic(), record)
-        self._url_to_id[canonical] = page_id
-        return page_id
-
-    def get(self, page_id: str) -> Optional[dict]:
-        entry = self._store.get(page_id)
-        if not entry:
-            return None
-        ts, record = entry
-        if time.monotonic() - ts > self.ttl:
-            self._store.pop(page_id, None)
-            return None
-        self._store.move_to_end(page_id)
-        return record
 
 
 class Tools:
@@ -451,9 +416,10 @@ class Tools:
                 "function": {
                     "name": "search_web",
                     "description": (
-                        "Search the web and crawl pages. Returns compact summaries with page_ids. "
-                        "If summaries are not enough, batch one or more page_ids into read_pages(page_ids=[...]) for full content. "
-                        "Prefer concise retrieval-style queries, quote exact error strings, and use site: when domain preference matters. "
+                        "Search the web for relevant sources and crawl the most useful pages into a reusable research set. "
+                        "Returns compact summaries, key points, metadata, and stable page_ids for follow-up reading. "
+                        "Prefer this over generic web search when you need source discovery plus structured follow-up reads. "
+                        "Prefer concise retrieval-style queries, quote exact errors or function names, and use site: when domain preference matters. "
                         "Prefer one batched read_pages call over repeated single-page calls when comparing multiple sources. "
                         "If you already know an important URL, pass it in urls; use convert_document for explicit document URLs like PDFs."
                     ),
@@ -463,13 +429,13 @@ class Tools:
                             "query": {
                                 "type": "string",
                                 "description": (
-                                    "The search query. Prefer concise noun phrases over conversational filler, quote exact errors, "
-                                    "and add site: filters when you want a specific domain."
+                                    "The search query. Prefer concise noun phrases over conversational filler, quote exact errors, error codes, "
+                                    "or function names, and add site: filters when you want a specific domain."
                                 ),
                             },
                             "urls": {
                                 "type": "array",
-                                "description": "Optional specific URLs to crawl in addition to search results. Each item may be a plain URL string or an object with per-URL crawl options.",
+                                "description": "Optional specific URLs to crawl in addition to search results. Each item may be a plain URL string or an object with per-URL crawl options. Use this when you already know must-read pages but still want them returned inside the same research pass.",
                                 "items": {
                                     "anyOf": [
                                         {"type": "string"},
@@ -503,7 +469,7 @@ class Tools:
                             "fresh": {
                                 "type": "boolean",
                                 "default": False,
-                                "description": "If true, bypass cached search and page results for this call.",
+                                "description": "If true, bypass SourceWeave's cached search and page results for this call and force a fresh upstream fetch. Use when freshness matters more than latency.",
                             },
                         },
                         "required": ["query"],
@@ -515,8 +481,10 @@ class Tools:
                 "function": {
                     "name": "read_pages",
                     "description": (
-                        "Get the full cleaned content for one or more pages from prior search_web results. "
-                        "Prefer batching related page_ids in one call instead of calling read_pages repeatedly. "
+                        "Retrieve cleaned, synthesis-ready content for one or more pages. "
+                        "Use page_ids from search_web when you already shortlisted sources, or use it as a standalone direct-URL reader when discovery is unnecessary. "
+                        "Prefer batching related page_ids or URLs in one call instead of calling read_pages repeatedly. "
+                        "Use this instead of a generic webfetch-style tool when you want cleaned extraction, focused reads, related links, or page-quality hints. "
                         "Use focus to extract the most relevant sections, and set related_links_limit=0 when you only want content without page-adjacent links."
                     ),
                     "parameters": {
@@ -526,10 +494,32 @@ class Tools:
                                 "type": "array",
                                 "description": (
                                     "One or more page_ids returned by search_web. "
-                                    "Batch related pages into a single call when you need to compare or synthesize multiple sources."
+                                    "Batch related pages into a single call when you need to compare or synthesize multiple sources. Prefer this over repeated single-page fetches."
                                 ),
                                 "items": {"type": "string"},
                                 "minItems": 1,
+                            },
+                            "urls": {
+                                "type": "array",
+                                "description": "Optional direct URLs to read without running search_web first. Use this when you already know what to read and want cleaned content immediately.",
+                                "items": {
+                                    "anyOf": [
+                                        {"type": "string"},
+                                        {
+                                            "type": "object",
+                                            "properties": {
+                                                "url": {"type": "string"},
+                                                "convert_document": {
+                                                    "type": "boolean",
+                                                    "default": False,
+                                                    "description": "Force document conversion for this URL when it points to a document.",
+                                                },
+                                            },
+                                            "required": ["url"],
+                                        },
+                                    ]
+                                },
+                                "default": [],
                             },
                             "focus": {
                                 "type": "string",
@@ -548,7 +538,7 @@ class Tools:
                                 "description": "Maximum number of characters to return per page.",
                             },
                         },
-                        "required": ["page_ids"],
+                        "anyOf": [{"required": ["page_ids"]}, {"required": ["urls"]}],
                     },
                 },
             },
@@ -557,7 +547,6 @@ class Tools:
         self.content_counter = 0
         logger.info("Web search tool initialized")
         self.total_urls = 0
-        self._page_store = _PageStore(max_pages=200, ttl_s=_DEFAULT_PAGE_TTL)
         self._cache = _CacheClient(
             url=self.valves.CACHE_REDIS_URL,
             enabled=self.valves.CACHE_ENABLED,
@@ -1040,14 +1029,15 @@ class Tools:
         source_type: Optional[str] = None,
         fallback_reason: Optional[str] = None,
     ) -> dict[str, Any]:
-        compact = self._build_compact_summary(record.get("content", ""), query)
+        content = self._page_record_content(record)
+        compact = self._build_compact_summary(content, query)
         result = {
             "url": record["url"],
             "title": record.get("title", ""),
             "page_id": page_id,
             "summary": compact["summary"],
             "key_points": compact["key_points"],
-            "content_length": len(record.get("content", "")),
+            "content_length": len(content),
             "content_type": record.get("content_type", "html"),
             "source_type": source_type or record.get("source_type", "search_result"),
             "content_source": record.get("content_source", "crawled_page"),
@@ -1057,7 +1047,7 @@ class Tools:
             result["search_rank"] = search_rank
         page_quality = self._infer_page_quality(
             result["title"],
-            str(record.get("content", "") or ""),
+            content,
             content_source=str(result["content_source"]),
             full_content_available=bool(result["full_content_available"]),
         )
@@ -1223,6 +1213,11 @@ class Tools:
                             if isinstance(result.get("images"), list)
                             else []
                         ),
+                        representations=(
+                            result.get("representations")
+                            if isinstance(result.get("representations"), dict)
+                            else None
+                        ),
                     )
                 result["source_type"] = candidate.get("source_type", "search_result")
                 result["content_source"] = str(
@@ -1379,13 +1374,91 @@ class Tools:
 
     @staticmethod
     def _page_cache_key(url: str) -> str:
-        return (
-            f"sc:page:{hashlib.md5(Tools._canonicalize_url(url).encode()).hexdigest()}"
-        )
+        return f"sc:page:{_PAGE_CACHE_VERSION}:{hashlib.md5(Tools._canonicalize_url(url).encode()).hexdigest()}"
 
     @staticmethod
     def _page_id_cache_key(page_id: str) -> str:
-        return f"sc:pageid:{page_id}"
+        return f"sc:pageid:{_PAGE_CACHE_VERSION}:{page_id}"
+
+    @staticmethod
+    def _page_id_for_url(url: str) -> str:
+        return hashlib.md5(Tools._canonicalize_url(url).encode()).hexdigest()[:10]
+
+    @staticmethod
+    def _page_record_content(record: Mapping[str, Any]) -> str:
+        content = record.get("content")
+        if content is not None:
+            return str(content or "")
+
+        representations = record.get("representations")
+        if isinstance(representations, dict):
+            return str(
+                representations.get("fit_markdown")
+                or representations.get("raw_markdown")
+                or representations.get("html")
+                or ""
+            )
+        return ""
+
+    @classmethod
+    def _normalize_page_record(cls, record: Mapping[str, Any]) -> dict[str, Any] | None:
+        url = str(record.get("url", "") or "")
+        if not url:
+            return None
+
+        content = cls._page_record_content(record)
+        content_type = str(record.get("content_type", "html") or "html")
+        representations = record.get("representations")
+        normalized_representations = {
+            "fit_markdown": "",
+            "raw_markdown": "",
+            "html": "",
+        }
+        if isinstance(representations, dict):
+            normalized_representations["fit_markdown"] = str(
+                representations.get("fit_markdown", "") or ""
+            )
+            normalized_representations["raw_markdown"] = str(
+                representations.get("raw_markdown", "") or ""
+            )
+            normalized_representations["html"] = str(
+                representations.get("html", "") or ""
+            )
+        elif content:
+            if content_type == "html":
+                normalized_representations["fit_markdown"] = content
+                normalized_representations["raw_markdown"] = content
+            else:
+                normalized_representations["fit_markdown"] = content
+
+        related_links = record.get("related_links")
+        images = record.get("images")
+        return {
+            "page_id": str(record.get("page_id") or cls._page_id_for_url(url)),
+            "url": url,
+            "title": str(record.get("title", "") or ""),
+            "content": content,
+            "content_type": content_type,
+            "source_type": str(
+                record.get("source_type", "search_result") or "search_result"
+            ),
+            "content_source": str(
+                record.get("content_source", "crawled_page") or "crawled_page"
+            ),
+            "full_content_available": bool(record.get("full_content_available", True)),
+            "related_links": list(related_links)
+            if isinstance(related_links, list)
+            else [],
+            "related_links_total": int(
+                record.get(
+                    "related_links_total",
+                    len(related_links) if isinstance(related_links, list) else 0,
+                )
+                or 0
+            ),
+            "images": list(images) if isinstance(images, list) else [],
+            "representations": normalized_representations,
+        }
 
     async def _store_page_record(
         self,
@@ -1400,21 +1473,33 @@ class Tools:
         related_links: Optional[list[dict[str, str]]] = None,
         related_links_total: int = 0,
         images: Optional[list[dict[str, str]]] = None,
+        representations: Optional[dict[str, str]] = None,
     ) -> str:
-        page_id = self._page_store.put(
-            url,
-            title,
-            content,
-            content_type=content_type,
-            source_type=source_type,
-            content_source=content_source,
-            full_content_available=full_content_available,
-            related_links=related_links,
-            related_links_total=related_links_total,
-            images=images,
-        )
+        page_id = self._page_id_for_url(url)
+        normalized_representations = {
+            "fit_markdown": "",
+            "raw_markdown": "",
+            "html": "",
+        }
+        if isinstance(representations, dict):
+            normalized_representations["fit_markdown"] = str(
+                representations.get("fit_markdown", "") or ""
+            )
+            normalized_representations["raw_markdown"] = str(
+                representations.get("raw_markdown", "") or ""
+            )
+            normalized_representations["html"] = str(
+                representations.get("html", "") or ""
+            )
+        elif content_type == "html" and content:
+            normalized_representations["fit_markdown"] = content
+            normalized_representations["raw_markdown"] = content
+        elif content:
+            normalized_representations["fit_markdown"] = content
+
         cache_record = json.dumps(
             {
+                "page_id": page_id,
                 "url": url,
                 "title": title,
                 "content": content,
@@ -1425,6 +1510,7 @@ class Tools:
                 "related_links": list(related_links or []),
                 "related_links_total": int(related_links_total or 0),
                 "images": list(images or []),
+                "representations": normalized_representations,
             }
         )
         ttl = _ttl_for_url(url)
@@ -1498,67 +1584,28 @@ class Tools:
         return "html"
 
     async def _load_page_record(self, page_id: str) -> Optional[dict]:
-        record = self._page_store.get(page_id)
-        if record:
-            return record
-
         cached_page = await self._cache.get(self._page_id_cache_key(page_id))
         if not cached_page:
             return None
 
         try:
-            cached_record = json.loads(cached_page)
-            cached_page_id = self._page_store.put(
-                cached_record["url"],
-                cached_record.get("title", ""),
-                cached_record["content"],
-                content_type=str(cached_record.get("content_type", "html") or "html"),
-                source_type=str(
-                    cached_record.get("source_type", "search_result") or "search_result"
-                ),
-                content_source=str(
-                    cached_record.get("content_source", "crawled_page")
-                    or "crawled_page"
-                ),
-                full_content_available=bool(
-                    cached_record.get("full_content_available", True)
-                ),
-                related_links=(
-                    list(cached_record.get("related_links", []))
-                    if isinstance(cached_record.get("related_links"), list)
-                    else []
-                ),
-                related_links_total=int(
-                    cached_record.get("related_links_total", 0) or 0
-                ),
-                images=(
-                    list(cached_record.get("images", []))
-                    if isinstance(cached_record.get("images"), list)
-                    else []
-                ),
-            )
-            if cached_page_id == page_id:
-                return self._page_store.get(page_id)
-            return self._page_store.get(cached_page_id)
+            normalized = self._normalize_page_record(json.loads(cached_page))
+            if not normalized or normalized["page_id"] != page_id:
+                return None
+            return normalized
         except Exception:
             return None
 
-        return None
-
-    async def _read_single_page(
+    async def _page_result_from_record(
         self,
-        page_id: str,
+        record: dict[str, Any],
+        *,
         focus: str = "",
         related_links_limit: int = 3,
         max_chars: int = 8000,
         __event_emitter__: EventEmitter = None,
-    ) -> dict:
-        record = await self._load_page_record(page_id)
-        if not record:
-            return {
-                "page_id": page_id,
-                "error": f"page_id '{page_id}' not found or expired. Call search_web again.",
-            }
+    ) -> dict[str, Any]:
+        page_id = str(record.get("page_id") or self._page_id_for_url(record["url"]))
 
         if __event_emitter__:
             await __event_emitter__(
@@ -1571,7 +1618,7 @@ class Tools:
                 }
             )
 
-        full_content = str(record.get("content", "") or "")
+        full_content = self._page_record_content(record)
         content = (
             self._bm25_extract_sections(full_content, focus, max_chars=max_chars)
             if focus
@@ -1637,6 +1684,28 @@ class Tools:
             )
         return result
 
+    async def _read_single_page(
+        self,
+        page_id: str,
+        focus: str = "",
+        related_links_limit: int = 3,
+        max_chars: int = 8000,
+        __event_emitter__: EventEmitter = None,
+    ) -> dict:
+        record = await self._load_page_record(page_id)
+        if not record:
+            return {
+                "page_id": page_id,
+                "error": f"page_id '{page_id}' not found or expired. Call search_web again.",
+            }
+        return await self._page_result_from_record(
+            record,
+            focus=focus,
+            related_links_limit=related_links_limit,
+            max_chars=max_chars,
+            __event_emitter__=__event_emitter__,
+        )
+
     async def _read_single_url(
         self,
         target: Any,
@@ -1658,43 +1727,14 @@ class Tools:
         try:
             cached_page = await self._cache.get(self._page_cache_key(url))
             if cached_page:
-                parsed_record = json.loads(cached_page)
+                parsed_record = self._normalize_page_record(json.loads(cached_page))
                 if isinstance(
                     parsed_record, dict
                 ) and self._cached_record_satisfies_candidate(parsed_record, candidate):
-                    page_id = await self._store_page_record(
-                        parsed_record["url"],
-                        parsed_record.get("title", ""),
-                        parsed_record["content"],
-                        content_type=str(
-                            parsed_record.get("content_type", "html") or "html"
-                        ),
-                        source_type="explicit_url",
-                        content_source=str(
-                            parsed_record.get("content_source", "crawled_page")
-                            or "crawled_page"
-                        ),
-                        full_content_available=bool(
-                            parsed_record.get("full_content_available", True)
-                        ),
-                        related_links=(
-                            list(parsed_record.get("related_links", []))
-                            if isinstance(parsed_record.get("related_links"), list)
-                            else []
-                        ),
-                        related_links_total=int(
-                            parsed_record.get("related_links_total", 0) or 0
-                        ),
-                        images=(
-                            list(parsed_record.get("images", []))
-                            if isinstance(parsed_record.get("images"), list)
-                            else []
-                        ),
-                    )
-                    cached_record = await self._load_page_record(page_id)
+                    cached_record = parsed_record
                     if cached_record:
                         return await self._read_single_page(
-                            page_id,
+                            str(cached_record["page_id"]),
                             focus=focus,
                             related_links_limit=related_links_limit,
                             max_chars=max_chars,
@@ -1724,12 +1764,22 @@ class Tools:
                 url,
                 query=focus,
                 timeout_s=self.valves.DOCUMENT_FETCH_TIMEOUT,
+                source_type="explicit_url",
                 __event_emitter__=__event_emitter__,
             )
             if not crawled:
                 return {"url": url, "error": f"Failed to read URL '{url}'."}
+            direct_record = self._normalize_page_record(crawled)
+            if isinstance(direct_record, dict):
+                return await self._page_result_from_record(
+                    direct_record,
+                    focus=focus,
+                    related_links_limit=related_links_limit,
+                    max_chars=max_chars,
+                    __event_emitter__=__event_emitter__,
+                )
             return await self._read_single_page(
-                crawled["page_id"],
+                str(crawled["page_id"]),
                 focus=focus,
                 related_links_limit=related_links_limit,
                 max_chars=max_chars,
@@ -1740,6 +1790,8 @@ class Tools:
             [url],
             query=focus or None,
             timeout_s=self.valves.CRAWL4AI_TIMEOUT,
+            cache_mode="bypass",
+            source_type="explicit_url",
             __event_emitter__=__event_emitter__,
         )
         if "error" in crawled_payload:
@@ -1748,6 +1800,16 @@ class Tools:
         content_items = crawled_payload.get("content", [])
         if not content_items:
             return {"url": url, "error": f"Failed to read URL '{url}'."}
+
+        direct_record = self._normalize_page_record(content_items[0])
+        if isinstance(direct_record, dict):
+            return await self._page_result_from_record(
+                direct_record,
+                focus=focus,
+                related_links_limit=related_links_limit,
+                max_chars=max_chars,
+                __event_emitter__=__event_emitter__,
+            )
 
         page_id = str(content_items[0].get("page_id", "") or "")
         if not page_id:
@@ -1991,56 +2053,19 @@ class Tools:
                     cached_page = await self._cache.get(self._page_cache_key(url))
                     if cached_page:
                         self._cache_stats["page_hits"] += 1
-                        parsed_record = json.loads(cached_page)
+                        parsed_record = self._normalize_page_record(
+                            json.loads(cached_page)
+                        )
                         if isinstance(parsed_record, dict) and (
                             self._cached_record_satisfies_candidate(
                                 parsed_record, candidate
                             )
                         ):
-                            page_id = await self._store_page_record(
-                                parsed_record["url"],
-                                parsed_record.get("title", ""),
-                                parsed_record["content"],
-                                content_type=str(
-                                    parsed_record.get("content_type", "html") or "html"
-                                ),
-                                source_type=candidate.get(
-                                    "source_type",
-                                    str(
-                                        parsed_record.get(
-                                            "source_type", "search_result"
-                                        )
-                                        or "search_result"
-                                    ),
-                                ),
-                                content_source=str(
-                                    parsed_record.get("content_source", "crawled_page")
-                                    or "crawled_page"
-                                ),
-                                full_content_available=bool(
-                                    parsed_record.get("full_content_available", True)
-                                ),
-                                related_links=(
-                                    list(parsed_record.get("related_links", []))
-                                    if isinstance(
-                                        parsed_record.get("related_links"), list
-                                    )
-                                    else []
-                                ),
-                                related_links_total=int(
-                                    parsed_record.get("related_links_total", 0) or 0
-                                ),
-                                images=(
-                                    list(parsed_record.get("images", []))
-                                    if isinstance(parsed_record.get("images"), list)
-                                    else []
-                                ),
-                            )
-                            cached_page_record = await self._load_page_record(page_id)
+                            cached_page_record = parsed_record
                             if cached_page_record:
                                 crawl_results.append(
                                     self._build_result_from_record(
-                                        page_id,
+                                        str(cached_page_record["page_id"]),
                                         cached_page_record,
                                         query,
                                         search_rank=candidate.get("search_rank"),
@@ -2062,6 +2087,7 @@ class Tools:
                         url,
                         query=query,
                         timeout_s=self.valves.DOCUMENT_FETCH_TIMEOUT,
+                        source_type=candidate.get("source_type", "search_result"),
                         __event_emitter__=__event_emitter__,
                     )
                     if crawled:
@@ -2083,6 +2109,8 @@ class Tools:
                     [url],
                     query=query,
                     timeout_s=crawl_timeout,
+                    cache_mode="write_only" if fresh else "enabled",
+                    source_type=candidate.get("source_type", "search_result"),
                     __event_emitter__=__event_emitter__,
                 )
                 if "error" in crawled_payload:
@@ -2132,6 +2160,7 @@ class Tools:
         url: str,
         query: str = "",
         timeout_s: Optional[float] = None,
+        source_type: str = "search_result",
         __event_emitter__: EventEmitter = None,
     ) -> Optional[dict]:
         if not self.valves.ENABLE_DOCUMENT_CONVERSION or not MARKITDOWN_AVAILABLE:
@@ -2210,12 +2239,13 @@ class Tools:
                 title,
                 content,
                 content_type="document",
-                source_type="search_result",
+                source_type=source_type,
                 content_source="converted_document",
                 full_content_available=True,
                 related_links=[],
                 related_links_total=0,
                 images=[],
+                representations={"fit_markdown": content, "raw_markdown": content},
             )
             compact = self._build_compact_summary(content, query)
             return {
@@ -2226,8 +2256,10 @@ class Tools:
                 "key_points": compact["key_points"],
                 "content_length": len(content),
                 "content_type": "document",
+                "source_type": source_type,
                 "content_source": "converted_document",
                 "full_content_available": True,
+                "representations": {"fit_markdown": content, "raw_markdown": content},
                 "_content": content,
             }
         except Exception as exc:
@@ -2247,6 +2279,8 @@ class Tools:
         urls: Union[list, str],
         query: Optional[str] = None,
         timeout_s: Optional[float] = None,
+        cache_mode: str = "enabled",
+        source_type: str = "search_result",
         __event_emitter__: EventEmitter = None,
     ) -> dict:
         if isinstance(urls, str):
@@ -2259,7 +2293,7 @@ class Tools:
         payload = {
             "urls": urls,
             "browser_config": _browser_config_payload(),
-            "crawler_config": _crawler_config_payload(self),
+            "crawler_config": _crawler_config_payload(self, cache_mode=cache_mode),
         }
 
         async def mark_request_failure(reason: str) -> None:
@@ -2330,13 +2364,25 @@ class Tools:
                                 )
                         continue
 
-                    markdown_data = item.get("markdown", "")
+                    page_content, summary_content = _markdown_content_variants(
+                        item.get("markdown", "")
+                    )
+                    markdown_data = item.get("markdown")
+                    representations = {
+                        "fit_markdown": "",
+                        "raw_markdown": "",
+                        "html": str(item.get("cleaned_html") or item.get("html") or ""),
+                    }
                     if isinstance(markdown_data, dict):
-                        page_content = markdown_data.get(
-                            "fit_markdown", ""
-                        ) or markdown_data.get("raw_markdown", "")
-                    else:
-                        page_content = str(markdown_data)
+                        representations["fit_markdown"] = str(
+                            markdown_data.get("fit_markdown", "") or ""
+                        )
+                        representations["raw_markdown"] = str(
+                            markdown_data.get("raw_markdown", "") or ""
+                        )
+                    elif page_content:
+                        representations["fit_markdown"] = page_content
+                        representations["raw_markdown"] = page_content
                     title = item.get("metadata", {}).get("title", "")
                     related_links, related_links_total = self._normalize_related_links(
                         item_url, item.get("links")
@@ -2347,14 +2393,17 @@ class Tools:
                         title,
                         page_content,
                         content_type="html",
-                        source_type="search_result",
+                        source_type=source_type,
                         content_source="crawled_page",
                         full_content_available=True,
                         related_links=related_links,
                         related_links_total=related_links_total,
                         images=images,
+                        representations=representations,
                     )
-                    compact = self._build_compact_summary(page_content, query or "")
+                    compact = self._build_compact_summary(
+                        summary_content or page_content, query or ""
+                    )
                     results.append(
                         {
                             "url": item_url,
@@ -2365,10 +2414,12 @@ class Tools:
                             "content_length": len(page_content),
                             "images": images,
                             "content_type": "html",
+                            "source_type": source_type,
                             "content_source": "crawled_page",
                             "full_content_available": True,
                             "related_links": related_links,
                             "related_links_total": related_links_total,
+                            "representations": representations,
                             "_content": page_content,
                         }
                     )

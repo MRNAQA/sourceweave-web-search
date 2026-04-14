@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3
+
+- sharpen `search_web` and `read_pages` descriptions so MCP clients understand when SourceWeave is a better fit than generic fetch tools for search-first, batched web research
+- remove the in-process page store and make Redis or Valkey the canonical persisted page cache with richer stored crawl representations
+- integrate Crawl4AI `CacheMode` intentionally so direct reads bypass upstream cache while fresh searches force a new fetch and still warm Crawl4AI's cache
+- fix direct URL and document reads to return immediately from the freshly fetched record even when cache persistence is unavailable in the same call
+- refresh README, contributing notes, and repo skills to reflect the Redis-only cache design, current quality gate, and release workflow expectations
+
 ## 0.2.2
 
 - fix MCP Registry publishing by aligning the registry namespace with the GitHub OIDC publisher namespace

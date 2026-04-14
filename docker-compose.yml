@@ -7,7 +7,7 @@ include:
 
 services:
   mcp:
-    image: ghcr.io/mrnaqa/sourceweave-web-search-mcp:0.2.2
+    image: ghcr.io/mrnaqa/sourceweave-web-search-mcp:0.2.3
     build:
       context: .
       dockerfile: Dockerfile
