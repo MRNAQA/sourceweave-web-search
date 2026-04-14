@@ -175,9 +175,12 @@ def test_read_pages_works_from_fresh_tool_instance() -> None:
     asyncio.run(scenario())
 
 
-def test_read_pages_accepts_multiple_page_ids_in_one_call() -> None:
+def test_read_pages_accepts_multiple_page_ids_in_one_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
         first_page_id = await _store_test_page(
             tool,
             "https://example.com/alpha",
@@ -309,9 +312,12 @@ def test_read_pages_requires_convert_document_for_direct_document_urls() -> None
     asyncio.run(scenario())
 
 
-def test_read_pages_multi_returns_partial_errors_for_missing_ids() -> None:
+def test_read_pages_multi_returns_partial_errors_for_missing_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
         first_page_id = await _store_test_page(
             tool,
             "https://example.com/gamma",
@@ -334,9 +340,12 @@ def test_read_pages_multi_returns_partial_errors_for_missing_ids() -> None:
     asyncio.run(scenario())
 
 
-def test_read_pages_returns_content_state_and_related_assets() -> None:
+def test_read_pages_returns_content_state_and_related_assets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
         page_id = await _store_test_page(
             tool,
             "https://example.com/guide",
@@ -445,9 +454,12 @@ def test_search_web_and_read_pages_mark_challenge_pages() -> None:
     asyncio.run(scenario())
 
 
-def test_read_pages_marks_blocked_pages() -> None:
+def test_read_pages_marks_blocked_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
         page_id = await _store_test_page(
             tool,
             "https://example.com/blocked",
