@@ -57,6 +57,7 @@ def _make_crawl_result(
     related_links: list[dict[str, str]] | None = None,
     related_links_total: int = 0,
     images: list[dict[str, str]] | None = None,
+    tables: list[dict[str, Any]] | None = None,
     source_type: str = "search_result",
 ) -> dict[str, Any]:
     page_id = Tools._page_id_for_url(url)
@@ -69,17 +70,13 @@ def _make_crawl_result(
         "key_points": compact["key_points"],
         "content_length": len(content),
         "images": list(images or []),
+        "tables": list(tables or []),
         "content_type": content_type,
         "source_type": source_type,
         "content_source": content_source,
         "full_content_available": full_content_available,
         "related_links": list(related_links or []),
         "related_links_total": related_links_total,
-        "representations": {
-            "fit_markdown": content,
-            "raw_markdown": content,
-            "html": "",
-        },
         "_content": content,
     }
 
@@ -97,6 +94,7 @@ async def _store_test_page(
     related_links: list[dict[str, str]] | None = None,
     related_links_total: int = 0,
     images: list[dict[str, str]] | None = None,
+    tables: list[dict[str, Any]] | None = None,
 ) -> str:
     return await tool._store_page_record(
         url,
@@ -109,11 +107,7 @@ async def _store_test_page(
         related_links=related_links,
         related_links_total=related_links_total,
         images=images,
-        representations={
-            "fit_markdown": content,
-            "raw_markdown": content,
-            "html": "",
-        },
+        tables=tables,
     )
 
 
@@ -226,7 +220,7 @@ def test_read_pages_accepts_direct_url_without_search(
             source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, cache_mode, source_type, __event_emitter__
+            _ = (timeout_s, cache_mode, source_type, __event_emitter__)
             crawl_calls.append(list(urls_to_fetch))
             return {
                 "content": [
@@ -281,10 +275,7 @@ def test_read_pages_accepts_direct_document_url_with_conversion(
 
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
 
-        page = await tool.read_pages(
-            urls=[{"url": pdf_url, "convert_document": True}],
-            max_chars=500,
-        )
+        page = await tool.read_pages(urls=[pdf_url], max_chars=500)
 
         assert fetch_calls == [pdf_url], fetch_calls
         assert page["url"] == pdf_url, page
@@ -294,20 +285,29 @@ def test_read_pages_accepts_direct_document_url_with_conversion(
     asyncio.run(scenario())
 
 
-def test_read_pages_requires_convert_document_for_direct_document_urls() -> None:
+def test_read_pages_returns_error_when_direct_document_conversion_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         tool = Tools()
         tool._cache.enabled = False
         pdf_url = "https://example.com/guide.pdf"
 
+        async def fake_fetch_document(
+            url: str,
+            query: str = "",
+            timeout_s: float | None = None,
+            source_type: str = "search_result",
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any] | None:
+            _ = url, query, timeout_s, source_type, __event_emitter__
+            return None
+
+        monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
+
         page = await tool.read_pages(urls=[pdf_url], max_chars=500)
 
-        assert page == {
-            "error": (
-                "URL looks like a document. Reissue read_pages with "
-                "urls=[{'url': '...','convert_document': true}] to convert it."
-            )
-        }, page
+        assert page == {"error": f"Failed to read URL '{pdf_url}'."}, page
 
     asyncio.run(scenario())
 
@@ -624,7 +624,7 @@ def test_explicit_url_failure_returns_search_only_fallback(
             source_type: str = "search_result",
             __event_emitter__: Any = None,
         ) -> dict[str, Any]:
-            _ = timeout_s, cache_mode, source_type, __event_emitter__
+            _ = (timeout_s, cache_mode, source_type, __event_emitter__)
             results = []
             if search_url in urls:
                 results.append(
@@ -1137,7 +1137,84 @@ def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
     asyncio.run(scenario())
 
 
-def test_search_web_can_convert_documents_per_explicit_url(
+def test_search_web_reuses_redirected_page_for_original_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
+        original_url = "https://example.com/docs/latest/"
+        final_url = "https://example.com/docs/latest"
+        crawl_calls: list[list[str]] = []
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    original_url,
+                    title="Docs",
+                    snippet="Latest docs.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, cache_mode, __event_emitter__
+            crawl_calls.append(list(urls_to_fetch))
+            return {
+                "content": [
+                    {
+                        **_make_crawl_result(
+                            tool,
+                            final_url,
+                            "Docs",
+                            "# Docs\n\nCanonical content.",
+                            query or "",
+                            source_type=source_type,
+                        ),
+                        "redirected_url": final_url,
+                    }
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        first_results = await tool.search_web(
+            query="latest docs",
+            depth="quick",
+            max_results=1,
+            fresh=False,
+        )
+        second_results = await tool.search_web(
+            query="latest docs",
+            depth="quick",
+            max_results=1,
+            fresh=False,
+        )
+
+        assert crawl_calls == [[original_url]], crawl_calls
+        assert first_results[0]["url"] == final_url, first_results
+        assert second_results[0]["url"] == final_url, second_results
+        assert first_results[0]["page_id"] == second_results[0]["page_id"], (
+            first_results,
+            second_results,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_search_web_auto_converts_explicit_document_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -1192,7 +1269,7 @@ def test_search_web_can_convert_documents_per_explicit_url(
 
         results = await tool.search_web(
             query="guide pdf",
-            urls=[{"url": pdf_url, "convert_document": True}],
+            urls=[pdf_url],
             depth="quick",
             max_results=1,
             fresh=True,
@@ -1208,7 +1285,7 @@ def test_search_web_can_convert_documents_per_explicit_url(
     asyncio.run(scenario())
 
 
-def test_search_web_does_not_auto_convert_documents(
+def test_search_web_auto_converts_document_search_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
@@ -1236,10 +1313,19 @@ def test_search_web_does_not_auto_convert_documents(
             timeout_s: float | None = None,
             source_type: str = "search_result",
             __event_emitter__: Any = None,
-        ) -> dict[str, Any] | None:
-            _ = query, timeout_s, source_type, __event_emitter__
+        ) -> dict[str, Any]:
+            _ = timeout_s, __event_emitter__
             fetch_calls.append(url)
-            return None
+            return _make_crawl_result(
+                tool,
+                url,
+                "Guide PDF",
+                "# Guide PDF\n\nConverted document content.",
+                query,
+                content_type="document",
+                content_source="converted_document",
+                source_type=source_type,
+            )
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
@@ -1251,10 +1337,77 @@ def test_search_web_does_not_auto_convert_documents(
             fresh=True,
         )
 
-        assert fetch_calls == [], fetch_calls
+        assert fetch_calls == [pdf_url], fetch_calls
         assert results[0]["url"] == pdf_url, results
-        assert results[0]["fallback_reason"] == "search_only", results[0]
-        assert results[0]["content_source"] == "search_snippet", results[0]
+        assert results[0]["content_type"] == "document", results[0]
+        assert results[0]["content_source"] == "converted_document", results[0]
+
+    asyncio.run(scenario())
+
+
+def test_search_web_honors_site_filters_after_search_provider_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    "https://docs.python.org/3/library/asyncio.html",
+                    title="asyncio docs",
+                    snippet="Official Python docs.",
+                    search_rank=1,
+                ),
+                tool._build_candidate(
+                    "https://example.com/python-asyncio-guide",
+                    title="Third-party guide",
+                    snippet="Community write-up.",
+                    search_rank=2,
+                ),
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, cache_mode, __event_emitter__
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        urls_to_fetch[0],
+                        "asyncio docs",
+                        "# asyncio\n\nOfficial Python asyncio docs.",
+                        query or "",
+                        source_type=source_type,
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool.search_web(
+            query="site:docs.python.org asyncio",
+            depth="quick",
+            max_results=5,
+            fresh=True,
+        )
+
+        assert len(results) == 1, results
+        assert results[0]["url"] == "https://docs.python.org/3/library/asyncio.html", (
+            results
+        )
 
     asyncio.run(scenario())
 
@@ -1270,7 +1423,22 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
             {"url": "https://example.com/related-a", "text": "Related A"},
             {"url": "https://example.com/related-b", "text": "Related B"},
         ]
-        images = [{"url": "https://example.com/image.png", "alt": "Guide image"}]
+        images = [
+            {
+                "url": "https://example.com/image.png",
+                "alt": "Guide image",
+                "desc": "Illustrates the main guide workflow.",
+            }
+        ]
+        tables = [
+            {
+                "headers": ["Plan", "Requests"],
+                "rows": [["Free", "100"], ["Pro", "1000"]],
+                "caption": "Usage limits",
+                "summary": "Compares free and pro request quotas.",
+                "metadata": {"row_count": 2, "column_count": 2, "has_headers": True},
+            }
+        ]
 
         async def fake_search(
             query_value: str, __event_emitter__: Any = None
@@ -1305,6 +1473,7 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
                         related_links=related_links,
                         related_links_total=7,
                         images=images,
+                        tables=tables,
                         source_type=source_type,
                     )
                 ],
@@ -1326,13 +1495,16 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
 
         assert "related_links" not in search_results[0], search_results[0]
         assert search_results[0]["images"] == images, search_results[0]
+        assert "tables" not in search_results[0], search_results[0]
         assert default_links["related_links"] == related_links, default_links
         assert default_links["related_links_total"] == 7, default_links
         assert default_links["related_links_more_available"] is True, default_links
         assert default_links["images"] == images, default_links
+        assert default_links["tables"] == tables, default_links
         assert "related_links" not in no_links, no_links
         assert no_links["related_links_total"] == 7, no_links
         assert no_links["related_links_more_available"] is True, no_links
+        assert no_links["tables"] == tables, no_links
 
     asyncio.run(scenario())
 
@@ -1419,6 +1591,43 @@ def test_markdown_content_variants_prefer_fit_markdown_with_links_preserved() ->
     assert summary_content == page_content
 
 
+def test_markdown_content_variants_fall_back_to_html_when_markdown_missing() -> None:
+    page_content, summary_content = _markdown_content_variants(
+        {"fit_markdown": "", "raw_markdown": ""},
+        html_fallback="<main>cleaned html</main>",
+    )
+
+    assert page_content == "<main>cleaned html</main>"
+    assert summary_content == page_content
+
+
+def test_page_record_content_prefers_markdown_then_cleaned_html() -> None:
+    assert (
+        Tools._page_record_content(
+            {
+                "representations": {
+                    "fit_markdown": "",
+                    "raw_markdown": "",
+                    "cleaned_html": "<main>cleaned html</main>",
+                    "fit_html": "<main>fit html</main>",
+                    "html": "<html>raw html</html>",
+                }
+            }
+        )
+        == "<main>cleaned html</main>"
+    )
+
+
+def test_normalized_result_url_prefers_redirected_url_without_fragment() -> None:
+    assert (
+        Tools._normalized_result_url(
+            "https://docs.crawl4ai.com/core/deep-crawling/#23-bestfirstcrawlingstrategy-recommended-deep-crawl-strategy",
+            "https://docs.crawl4ai.com/core/deep-crawling/",
+        )
+        == "https://docs.crawl4ai.com/core/deep-crawling"
+    )
+
+
 def test_crawler_config_preserves_links_in_markdown_output() -> None:
     tool = Tools()
     payload = _crawler_config_payload(tool)
@@ -1430,7 +1639,7 @@ def test_crawler_config_preserves_links_in_markdown_output() -> None:
     assert "exclude_external_links" not in payload["params"]
 
 
-def test_crawl_url_stores_fit_markdown_with_links_preserved(
+def test_crawl_url_stores_content_with_links_preserved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeResponse:
@@ -1471,6 +1680,9 @@ def test_crawl_url_stores_fit_markdown_with_links_preserved(
                             "success": True,
                             "status_code": 200,
                             "metadata": {"title": "PyPI Docs"},
+                            "redirected_url": "https://docs.pypi.org/",
+                            "fit_html": "<main><h1>PyPI Docs</h1></main>",
+                            "cleaned_html": "<main><h1>PyPI Docs</h1></main>",
                             "markdown": {
                                 "fit_markdown": "# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
                                 "raw_markdown": "[ Skip to content ](https://docs.pypi.org/#welcome-to-pypi-user-documentation)\n\n# PyPI Docs\n\nTo view the developer documentation, visit the [Warehouse documentation](https://warehouse.pypa.io/).",
@@ -1494,12 +1706,47 @@ def test_crawl_url_stores_fit_markdown_with_links_preserved(
         assert result["content"][0]["summary"].startswith(
             "To view the developer documentation, visit the"
         )
+        assert result["content"][0]["url"] == "https://docs.pypi.org/"
+        assert result["content"][0]["redirected_url"] == "https://docs.pypi.org/"
+        assert result["content"][0]["status_code"] == 200
         assert "Skip to content" not in result["content"][0]["summary"]
         page = await tool.read_pages(result["content"][0]["page_id"], max_chars=500)
         assert "[Warehouse documentation]" in page["content"], page
+        assert page["redirected_url"] == "https://docs.pypi.org/"
+        assert page["status_code"] == 200
         assert "Skip to content" not in page["content"], page
+        cached_page = await tool._cache.get(
+            tool._page_cache_key("https://docs.pypi.org/")
+        )
+        assert cached_page is not None
+        cached_record = json.loads(cached_page)
+        assert cached_record["redirected_url"] == "https://docs.pypi.org/"
+        assert cached_record["status_code"] == 200
+        assert "[Warehouse documentation]" in cached_record["content"]
+        assert "representations" not in cached_record
 
     asyncio.run(scenario())
+
+
+def test_normalize_page_record_preserves_redirected_url_and_status_code() -> None:
+    normalized = Tools._normalize_page_record(
+        {
+            "url": "https://example.com/final",
+            "title": "Example",
+            "content_type": "html",
+            "content_source": "crawled_page",
+            "redirected_url": "https://example.com/final",
+            "status_code": "302",
+            "representations": {
+                "fit_markdown": "Example content",
+                "raw_markdown": "Example content",
+            },
+        }
+    )
+
+    assert normalized is not None
+    assert normalized["redirected_url"] == "https://example.com/final"
+    assert normalized["status_code"] == 302
 
 
 def test_read_pages_direct_url_ignores_legacy_page_cache_key(
@@ -1575,7 +1822,9 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
                 "crawl": {"failed": 1},
             }
 
-        async def search_web(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        async def mcp_search_web(
+            self, *args: Any, **kwargs: Any
+        ) -> list[dict[str, Any]]:
             _ = args, kwargs
             return [
                 {
@@ -1587,7 +1836,7 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
                 }
             ]
 
-        async def read_pages(self, *args: Any, **kwargs: Any) -> None:
+        async def mcp_read_pages(self, *args: Any, **kwargs: Any) -> None:
             _ = args, kwargs
             return None
 
@@ -1611,10 +1860,12 @@ def test_cli_reads_direct_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeTool:
         last_query_metadata: dict[str, Any] = {}
 
-        async def read_pages(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        async def mcp_read_urls(
+            self, *args: Any, **kwargs: Any
+        ) -> list[dict[str, Any]]:
             captured_read_kwargs["args"] = args
             captured_read_kwargs["kwargs"] = kwargs
-            return {"url": "https://packaging.python.org/en/latest/", "content": "ok"}
+            return [{"url": "https://packaging.python.org/en/latest/", "content": "ok"}]
 
     async def scenario() -> None:
         from sourceweave_web_search import cli as cli_module
@@ -1626,13 +1877,13 @@ def test_cli_reads_direct_urls(monkeypatch: pytest.MonkeyPatch) -> None:
             [
                 "--read-url",
                 "https://packaging.python.org/en/latest/",
-                "--related-links-limit",
-                "1",
             ]
         )
         payload = await cli_module.run_cli(args)
 
-        assert payload["read_pages"]["url"] == "https://packaging.python.org/en/latest/"
+        assert (
+            payload["read_urls"][0]["url"] == "https://packaging.python.org/en/latest/"
+        )
         assert captured_read_kwargs["kwargs"]["urls"] == [
             "https://packaging.python.org/en/latest/"
         ], captured_read_kwargs
@@ -1641,7 +1892,7 @@ def test_cli_reads_direct_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(scenario())
 
 
-def test_cli_parses_json_url_objects_and_read_related_links_limit(
+def test_cli_passes_plain_url_strings_and_domains(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_search_kwargs: dict[str, Any] = {}
@@ -1650,7 +1901,9 @@ def test_cli_parses_json_url_objects_and_read_related_links_limit(
     class FakeTool:
         last_query_metadata: dict[str, Any] = {}
 
-        async def search_web(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        async def mcp_search_web(
+            self, *args: Any, **kwargs: Any
+        ) -> list[dict[str, Any]]:
             _ = args
             captured_search_kwargs.update(kwargs)
             return [
@@ -1663,10 +1916,12 @@ def test_cli_parses_json_url_objects_and_read_related_links_limit(
                 }
             ]
 
-        async def read_pages(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        async def mcp_read_pages(
+            self, *args: Any, **kwargs: Any
+        ) -> list[dict[str, Any]]:
             captured_read_kwargs["args"] = args
             captured_read_kwargs["kwargs"] = kwargs
-            return {"page_id": "page123", "content": "Guide content"}
+            return [{"page_id": "page123", "content": "Guide content"}]
 
     async def scenario() -> None:
         from sourceweave_web_search import cli as cli_module
@@ -1678,22 +1933,22 @@ def test_cli_parses_json_url_objects_and_read_related_links_limit(
             [
                 "--query",
                 "guide pdf",
+                "--domain",
+                "example.com",
                 "--url",
-                '{"url": "https://example.com/guide.pdf", "convert_document": true}',
+                "https://example.com/guide.pdf",
                 "--read-first-page",
-                "--related-links-limit",
-                "2",
             ]
         )
         await cli_module.run_cli(args)
 
-        assert captured_search_kwargs["urls"] == [
-            {
-                "url": "https://example.com/guide.pdf",
-                "convert_document": True,
-            }
-        ], captured_search_kwargs
-        assert captured_read_kwargs["kwargs"]["related_links_limit"] == 2, (
+        assert captured_search_kwargs["urls"] == ["https://example.com/guide.pdf"], (
+            captured_search_kwargs
+        )
+        assert captured_search_kwargs["domains"] == ["example.com"], (
+            captured_search_kwargs
+        )
+        assert captured_read_kwargs["kwargs"]["page_ids"] == ["page123"], (
             captured_read_kwargs
         )
 
@@ -1708,10 +1963,6 @@ def test_run_tool_call_batches_read_pages_results() -> None:
             "scripts/run_tool_call.py",
             "--query",
             "python programming",
-            "--depth",
-            "quick",
-            "--max-results",
-            "2",
             "--read-first-pages",
             "2",
         ],
@@ -1724,14 +1975,12 @@ def test_run_tool_call_batches_read_pages_results() -> None:
     payload = json.loads(result.stdout)
 
     assert isinstance(payload.get("search_web"), list), payload
-    assert len(payload["search_web"]) == 2, payload
+    assert len(payload["search_web"]) >= 2, payload
 
     batched_read = payload.get("read_pages")
-    assert isinstance(batched_read, dict), payload
-    assert batched_read["returned_pages"] == 2, batched_read
-    assert len(batched_read["requested_page_ids"]) == 2, batched_read
-    assert len(batched_read["pages"]) == 2, batched_read
-    assert not batched_read["errors"], batched_read
+    assert isinstance(batched_read, list), payload
+    assert len(batched_read) == 2, batched_read
+    assert all(page.get("page_id") for page in batched_read), batched_read
 
 
 def test_search_web_honors_requested_max_results_above_default(

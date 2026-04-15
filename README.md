@@ -15,9 +15,9 @@ For most users, the setup is simple:
 ## Key Features
 
 - MCP server with `stdio`, `sse`, and `streamable-http` transports
-- fully local web research workflow with source discovery and batched page reading for MCP clients
-- explicit per-URL document conversion for PDFs and other supported documents
-- focused reads, direct URL reads, related-link limits, image metadata, and page-quality hints
+- fully local web research workflow with source discovery and stable follow-up reads for MCP clients
+- automatic document conversion for PDFs and other supported documents when detected
+- lean MCP contract with `search_web`, `read_pages`, and `read_urls`
 - publishable Python package, container image, and generated OpenWebUI artifact
 - compatible with OpenCode, VS Code Copilot, and other MCP clients
 
@@ -175,29 +175,33 @@ Search and immediately read the first results:
 sourceweave-search --query "python programming" --read-first-pages 2
 ```
 
-Read a discovered page and include stored related links:
+Verified live examples from the repo-local stack:
+
+- `sourceweave-search --read-url https://en.wikipedia.org/wiki/Comparison_of_HTTP_server_software ...` returned cleaned page content
+- `sourceweave-search --query 'HTTP overview' --domain developer.mozilla.org --read-first-page ...` returned compact search results plus a focused page read
+
+Constrain search to a specific host with `--domain`:
 
 ```bash
 sourceweave-search \
   --query "react useEffect cleanup example" \
-  --read-first-page \
-  --related-links-limit 3
+  --domain developer.mozilla.org \
+  --read-first-page
 ```
 
 Read a direct URL without running `search_web` first:
 
 ```bash
 sourceweave-search \
-  --read-url "https://packaging.python.org/en/latest/" \
-  --max-chars 2000
+  --read-url "https://packaging.python.org/en/latest/"
 ```
 
-Force document conversion for an explicit URL:
+Read a document URL directly without extra flags:
 
 ```bash
 sourceweave-search \
   --query "guide pdf" \
-  --url '{"url": "https://example.com/guide.pdf", "convert_document": true}'
+  --url "https://example.com/guide.pdf"
 ```
 
 ## MCP Server
@@ -216,11 +220,17 @@ sourceweave-search-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 
 ## What MCP Clients Get
 
-MCP clients receive a simple two-step flow:
+MCP clients receive a lean three-tool contract:
 
-- `search_web`: discover relevant sources with compact summaries, key points, metadata, and stable `page_id` handles for follow-up work
-- `read_pages`: read by `page_id` after `search_web` or use it as a standalone direct-URL reader, batch related pages in one call, optionally focus the extraction, and retrieve stored related-link and page-quality context when useful
+- `search_web(query, domains?, urls?)`: discover relevant sources and get compact results with stable `page_id` handles
+- `read_pages(page_ids, focus?)`: read stored pages by `page_id`
+- `read_urls(urls, focus?)`: read one or more direct URLs without searching first
 
+Public result shapes are intentionally small:
+
+- `search_web` returns `page_id`, `url`, `title`, `summary`, and `key_points`
+- `read_pages` and `read_urls` return `page_id`, `url`, `title`, and `content`
+- `content_type` is only included when the content is not HTML, and `truncated` is only included when true
 
 Human operators usually only need to know how to run the server and where to point the runtime endpoints. MCP clients handle the exact tool parameters.
 

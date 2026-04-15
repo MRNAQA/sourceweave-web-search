@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## 0.3.0
+
+- simplify the implementation back to the minimal public search/read behavior after reviewing the hidden internal feature paths with a KISS/YAGNI lens
+- keep the default `fit_markdown`-first cleaned output path and compact `search_web` surface aligned across code, tests, docs, and the OpenWebUI artifact
+- preserve Crawl4AI-extracted `tables` by default through crawl and cache so `read_pages` returns them without adding new public flags
+- preserve Crawl4AI image `desc` values by default alongside `url` and `alt`, and document the verified CLI behavior in README and tool descriptions
+
 ## 0.2.3
 
 - sharpen `search_web` and `read_pages` descriptions so MCP clients understand when SourceWeave is a better fit than generic fetch tools for search-first, batched web research

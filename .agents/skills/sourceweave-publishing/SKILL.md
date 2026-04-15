@@ -9,16 +9,26 @@ This skill is for publishing `sourceweave-web-search` autonomously and safely.
 
 The repo already has a concrete release shape. Do not invent a new one unless the user explicitly asks. The core job is to make release metadata consistent, verify the release surface, publish the package/container artifacts, and only then publish MCP Registry metadata.
 
+Apply KISS/YAGNI/DRY/SOLID when reviewing or editing release flow:
+
+- do not add new knobs or alternate publish paths unless the repo already uses them
+- do not duplicate release logic across docs, scripts, and skill text when one source of truth already exists
+- prefer small repairs to the existing workflow over new helper scripts
+- stop and ask only when a real release blocker exists, not for routine operational steps
+
 ## Goal
 
-Publish SourceWeave with the least surprising flow:
+Publish SourceWeave with least surprising flow:
 
 1. bump the version in `pyproject.toml`
-2. sync derived release metadata
-3. verify the package, artifact, tests, and container surface
-4. run the GitHub release workflow
-5. confirm PyPI and container artifacts are live
-6. publish `server.json` to the MCP Registry
+2. update `CHANGELOG.md` so released changes move out of `Unreleased`
+3. review public docs and refresh `README.md` if release changes user-facing behavior
+4. sync derived release metadata
+5. verify package, artifact, tests, and container surface
+6. commit and push release-ready state to target branch
+7. run GitHub release workflow
+8. confirm PyPI and container artifacts are live
+9. publish `server.json` to MCP Registry
 
 ## Source Of Truth
 
@@ -45,7 +55,7 @@ The sync/check path covers:
 
 Do not hand-edit those version fields unless the user explicitly asks for a one-off repair.
 
-The sync script does not cover every literal version occurrence in the repo.
+The sync script does not cover every literal version occurrence in repo.
 
 It does not update:
 
@@ -53,13 +63,19 @@ It does not update:
 - `CHANGELOG.md`
 - skill docs, eval fixtures, or other prose that may mention old release numbers
 
+For README work, do not hand-wave. If public behavior, install/run steps, or release surfaces changed enough that README may now be stale, explicitly load global `create-readme` skill and use it to review/update `README.md` before release verification.
+
 Recent architectural context that matters for release validation:
 
 - Redis or Valkey is now the canonical persisted page store
 - SourceWeave stores richer page representations in cache instead of relying on an in-process page store
 - direct URL reads should still succeed even if same-call persistence is unavailable
-- Crawl4AI `CacheMode` is intentionally used for `fresh` and direct-read semantics, so release testing should include at least one normal search path and one direct URL read path when behavior changed
-- public docs and tool descriptions should make it explicit that `read_pages` works both after `search_web` and as a standalone direct-URL reader, and that it is the preferred alternative to generic `webfetch`-style tools when cleaned extraction matters
+- public MCP contract is now lean three-tool split:
+  - `search_web(query, domains?, urls?)`
+  - `read_pages(page_ids, focus?)`
+  - `read_urls(urls, focus?)`
+- `read_pages` is follow-up read by `page_id`; direct URL reading belongs to `read_urls`
+- Crawl4AI `CacheMode` is intentionally used for search freshness and direct-read semantics, so release testing should include at least one normal search path and one direct URL read path when behavior changed
 
 The generated OpenWebUI artifact is a separate derived surface. Keep it aligned with:
 
@@ -80,6 +96,20 @@ And the combined verification flow as:
 ```bash
 uv run python scripts/sync_release_metadata.py --check
 uv run sourceweave-build-openwebui --check
+```
+
+For autonomous releases, use this full local prep flow unless user explicitly narrows scope:
+
+```bash
+uv run python scripts/sync_release_metadata.py
+uv run sourceweave-build-openwebui
+uv run python scripts/sync_release_metadata.py --check
+uv run sourceweave-build-openwebui --check
+uv run pytest tests/test_tool.py tests/test_config.py tests/test_packaging.py -q -p no:cacheprovider
+uv run ruff check src tests
+uv run mypy
+uv build --no-sources --sdist --wheel --out-dir dist/release-check --clear --no-create-gitignore
+docker build -t sourceweave-web-search-mcp:release-check .
 ```
 
 ## Canonical Release Surfaces
@@ -136,12 +166,17 @@ docker inspect sourceweave-web-search-mcp-1 --format '{{.Config.Image}} {{json .
 
 Use this order unless the user explicitly changes it:
 
-1. GitHub release workflow
-2. confirm PyPI package is live
-3. confirm GHCR image is live
-4. run MCP Registry publish workflow
+1. local version/changelog/README/update pass
+2. local verification pass
+3. commit and push target branch
+4. GitHub release workflow
+5. confirm PyPI package is live
+6. confirm GHCR image is live
+7. run MCP Registry publish workflow
 
 This order matters because MCP Registry metadata should point at already-published artifacts.
+
+Do not skip commit/push in autonomous release mode. `workflow_dispatch` releases remote Git state, not local uncommitted edits.
 
 ## GitHub Release Workflow
 
@@ -178,6 +213,13 @@ gh workflow run release.yml \
   -f publish_ghcr=true \
   -f publish_dockerhub=false \
   -f changelog="$(cat CHANGELOG.md)"
+```
+
+After dispatch, wait for result and inspect logs:
+
+```bash
+gh run watch --exit-status
+gh run list --workflow release.yml --limit 1
 ```
 
 ## Registry Targets
@@ -233,6 +275,13 @@ Typical invocation:
 
 ```bash
 gh workflow run publish-mcp-registry.yml --ref main -f target_ref=main
+```
+
+After dispatch, wait for result and inspect logs:
+
+```bash
+gh run watch --exit-status
+gh run list --workflow publish-mcp-registry.yml --limit 1
 ```
 
 ## What To Check After Publishing
@@ -304,6 +353,8 @@ Pause and ask the user before proceeding if:
 - the release workflow inputs imply publishing to Docker Hub but secrets are missing
 - PyPI trusted publishing fails with an identity mismatch
 - the user asks to publish MCP Registry metadata before PyPI or GHCR artifacts are live
+
+If untracked temp eval files or scratch outputs exist, do not include them in release commit unless user explicitly wants them shipped.
 
 ## Response Style
 

@@ -1,6 +1,6 @@
 [project]
 name = "sourceweave-web-search"
-version = "0.2.3"
+version = "0.3.0"
 description = "Fully local MCP server and CLI for web research"
 readme = "README.md"
 license = "MIT"

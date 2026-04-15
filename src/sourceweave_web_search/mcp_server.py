@@ -1,87 +1,60 @@
 import argparse
 import os
 from typing import Annotated
-from typing import Literal
 from typing import Sequence
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel
 from pydantic import Field
 
 from sourceweave_web_search.config import build_tools
 from sourceweave_web_search.tool import Tools
 
 
-class UrlTarget(BaseModel):
-    url: str = Field(description="Absolute URL to crawl or convert.")
-    convert_document: bool = Field(
-        default=False,
-        description="Force document conversion for this URL when it points to a document such as a PDF.",
-    )
-
-
 SearchQuery = Annotated[
     str,
     Field(
         description=(
-            "Search query. Prefer concise retrieval-style queries, quote exact errors, "
-            "error codes, or function names, and use site: when a specific domain matters."
+            "Search query. Prefer concise retrieval-style queries and quote exact errors, error codes, or function names when relevant."
+        )
+    ),
+]
+
+SearchDomains = Annotated[
+    list[str] | None,
+    Field(
+        description=(
+            "Optional domains to constrain results to, such as docs.python.org or developer.mozilla.org."
         )
     ),
 ]
 
 SearchUrls = Annotated[
-    list[str | UrlTarget] | None,
+    list[str] | None,
     Field(
         description=(
-            "Optional specific URLs to crawl in addition to search results. Each item may be "
-            "either a plain URL string or an object with per-URL options like convert_document. "
+            "Optional specific URLs to crawl in addition to search results. Pass plain URL strings. "
+            "Supported document URLs such as PDFs are converted automatically when detected. "
             "Use this when you already know a must-read page but still want it returned inside the same research pass."
         )
     ),
 ]
 
-SearchDepth = Annotated[
-    Literal["quick", "normal", "deep"],
-    Field(
-        description=(
-            "How much search and crawl effort to spend. quick is fastest, normal is balanced, "
-            "and deep explores more candidates."
-        )
-    ),
-]
-
-SearchMaxResults = Annotated[
-    int | None,
-    Field(description="Optional cap on how many summarized results to return."),
-]
-
-SearchFresh = Annotated[
-    bool,
-    Field(
-        description=(
-            "If true, bypass SourceWeave's cached search and page results for this call and force a fresh upstream fetch. "
-            "Use when freshness matters more than latency."
-        )
-    ),
-]
-
 ReadPageIds = Annotated[
-    list[str] | None,
+    list[str],
     Field(
         description=(
-            "Optional page_ids returned by search_web. Batch related pages into one "
+            "Page_ids returned by search_web. Batch related pages into one "
             "call when comparing or synthesizing multiple sources. Prefer this over repeated single-page fetches."
         )
     ),
 ]
 
 ReadUrls = Annotated[
-    list[str | UrlTarget] | None,
+    list[str],
     Field(
         description=(
-            "Optional direct URLs to read without running search_web first. Each item may be "
-            "either a plain URL string or an object with per-URL options like convert_document. "
+            "Direct URLs to read without running search_web first. Pass plain URL strings. "
+            "Supported document URLs such as PDFs are converted automatically when detected. "
             "Use this when discovery is unnecessary and you want cleaned content immediately."
         )
     ),
@@ -96,22 +69,6 @@ ReadFocus = Annotated[
             "function names, or concepts when you want a focused excerpt."
         )
     ),
-]
-
-ReadRelatedLinksLimit = Annotated[
-    int,
-    Field(
-        description=(
-            "Maximum number of stored related links to return per page. Use 0 to omit the links "
-            "array while still returning related_links_total and related_links_more_available."
-        ),
-        ge=0,
-    ),
-]
-
-ReadMaxChars = Annotated[
-    int,
-    Field(description="Maximum number of characters to return per page."),
 ]
 
 
@@ -139,52 +96,51 @@ def build_mcp_server(
     @server.tool(
         name="search_web",
         description=(
-            "Search the web for relevant sources and crawl the most useful pages into a reusable research set. "
-            "Returns compact summaries, key points, metadata, and stable page_ids for follow-up reading. "
-            "Prefer this over generic web search when you need source discovery plus structured follow-up reads. "
-            "Use concise retrieval-style queries, quote exact errors, and add site: filters when domain preference matters. "
-            "If you already know an important URL, pass it in urls; use convert_document for explicit document URLs like PDFs. "
-            "Use read_pages next when summaries are not enough or when you want to batch full reads across multiple sources."
+            "Search the web for relevant sources and return compact summaries with stable page_ids for follow-up reads. "
+            "Use domains when you want to constrain results to specific hosts."
         ),
     )
     async def search_web(
         query: SearchQuery,
+        domains: SearchDomains = None,
         urls: SearchUrls = None,
-        depth: SearchDepth = "normal",
-        max_results: SearchMaxResults = None,
-        fresh: SearchFresh = False,
     ):
-        return await tool_instance.search_web(
+        return await tool_instance.mcp_search_web(
             query=query,
+            domains=domains,
             urls=urls,
-            depth=depth,
-            max_results=max_results,
-            fresh=fresh,
         )
 
     @server.tool(
         name="read_pages",
         description=(
-            "Retrieve cleaned, synthesis-ready content for one or more pages. Use it either after search_web with page_ids "
-            "or as a standalone direct-URL reader when you already know what to read and do not need a search step first. "
-            "Prefer batching related page_ids or URLs in a single call. Use this instead of a generic webfetch-style tool "
-            "when you want cleaned extraction, focused reads, related links, or page-quality hints. "
-            "Leave focus empty for a normal cleaned read. Use related_links_limit=0 when you only want page content without page-adjacent links."
+            "Retrieve cleaned content for one or more stored pages using page_ids returned by search_web. "
+            "Batch related page_ids in one call when comparing multiple sources."
         ),
     )
     async def read_pages(
-        page_ids: ReadPageIds = None,
-        urls: ReadUrls = None,
+        page_ids: ReadPageIds,
         focus: ReadFocus = "",
-        related_links_limit: ReadRelatedLinksLimit = 3,
-        max_chars: ReadMaxChars = 8000,
     ):
-        return await tool_instance.read_pages(
+        return await tool_instance.mcp_read_pages(
             page_ids=page_ids,
+            focus=focus,
+        )
+
+    @server.tool(
+        name="read_urls",
+        description=(
+            "Retrieve cleaned content for one or more direct URLs without running search_web first. "
+            "Supported document URLs such as PDFs are converted automatically when detected."
+        ),
+    )
+    async def read_urls(
+        urls: ReadUrls,
+        focus: ReadFocus = "",
+    ):
+        return await tool_instance.mcp_read_urls(
             urls=urls,
             focus=focus,
-            related_links_limit=related_links_limit,
-            max_chars=max_chars,
         )
 
     return server

@@ -12,30 +12,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--query", default="", help="Query for search_web")
     parser.add_argument(
+        "--domain",
+        dest="domains",
+        action="append",
+        default=[],
+        help="Optional domain constraint for search_web. Repeatable.",
+    )
+    parser.add_argument(
         "--url",
         dest="urls",
         action="append",
         default=[],
         help=(
             "Optional URL to crawl alongside search results. Repeatable. "
-            "May be a plain URL string or a JSON object like "
-            '\'{"url": "https://example.com/file.pdf", "convert_document": true}\'.'
+            "Supported document URLs such as PDFs are converted automatically when detected."
         ),
     )
-    parser.add_argument(
-        "--related-links-limit",
-        type=int,
-        default=3,
-        help="Maximum number of stored related links to include per read_pages result. Use 0 to omit them.",
-    )
-    parser.add_argument(
-        "--depth",
-        choices=["quick", "normal", "deep"],
-        default="normal",
-        help="search_web depth",
-    )
-    parser.add_argument("--max-results", type=int, default=None)
-    parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--read-first-page", action="store_true")
     parser.add_argument(
         "--read-first-pages",
@@ -57,12 +49,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help=(
             "Read one or more direct URLs without running search_web first. Repeatable. "
-            "May be a plain URL string or a JSON object like "
-            '\'{"url": "https://example.com/file.pdf", "convert_document": true}\'.'
+            "Supported document URLs such as PDFs are converted automatically when detected."
         ),
     )
     parser.add_argument("--focus", default="")
-    parser.add_argument("--max-chars", type=int, default=1200)
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument(
         "--include-metadata",
@@ -98,35 +88,22 @@ def _page_ids_from_results(results: Any, count: int) -> list[str]:
     ]
 
 
-def _targets_from_raw_args(
-    raw_values: Sequence[str], flag_name: str
-) -> list[Any] | None:
-    normalized_urls: list[Any] = []
+def _targets_from_raw_args(raw_values: Sequence[str]) -> list[str] | None:
+    normalized_urls: list[str] = []
     for raw_value in raw_values:
         value = str(raw_value or "").strip()
         if not value:
-            continue
-        if value.startswith("{"):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(f"Invalid JSON passed to {flag_name}: {exc}") from exc
-            if not isinstance(parsed, dict) or not parsed.get("url"):
-                raise SystemExit(
-                    f"JSON passed to {flag_name} must be an object with at least a 'url' field"
-                )
-            normalized_urls.append(parsed)
             continue
         normalized_urls.append(value)
     return normalized_urls or None
 
 
-def _urls_from_args(args: argparse.Namespace) -> list[Any] | None:
-    return _targets_from_raw_args(args.urls, "--url")
+def _urls_from_args(args: argparse.Namespace) -> list[str] | None:
+    return _targets_from_raw_args(args.urls)
 
 
-def _read_urls_from_args(args: argparse.Namespace) -> list[Any] | None:
-    return _targets_from_raw_args(args.read_urls, "--read-url")
+def _read_urls_from_args(args: argparse.Namespace) -> list[str] | None:
+    return _targets_from_raw_args(args.read_urls)
 
 
 def _valve_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -137,24 +114,18 @@ def _valve_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-async def _read_pages(
-    tool: Any,
-    page_ids: list[str],
-    urls: list[Any] | None,
-    focus: str,
-    related_links_limit: int,
-    max_chars: int,
-) -> Any:
-    if not page_ids and not urls:
+async def _read_pages(tool: Any, page_ids: list[str], focus: str) -> Any:
+    if not page_ids:
         return None
 
-    return await tool.read_pages(
-        page_ids=page_ids[0] if len(page_ids) == 1 else page_ids or None,
-        urls=urls,
-        focus=focus,
-        related_links_limit=related_links_limit,
-        max_chars=max_chars,
-    )
+    return await tool.mcp_read_pages(page_ids=page_ids, focus=focus)
+
+
+async def _read_urls(tool: Any, urls: list[str] | None, focus: str) -> Any:
+    if not urls:
+        return None
+
+    return await tool.mcp_read_urls(urls=urls, focus=focus)
 
 
 async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
@@ -165,12 +136,10 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {}
 
     if args.query:
-        results = await tool.search_web(
+        results = await tool.mcp_search_web(
             query=args.query,
+            domains=args.domains or None,
             urls=_urls_from_args(args),
-            depth=args.depth,
-            max_results=args.max_results,
-            fresh=args.fresh,
         )
         payload["search_web"] = results
         if args.include_metadata:
@@ -181,10 +150,7 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
         read_payload = await _read_pages(
             tool,
             page_ids,
-            None,
             args.focus,
-            args.related_links_limit,
-            args.max_chars,
         )
         if read_payload is not None:
             payload["read_pages"] = read_payload
@@ -194,20 +160,12 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
         payload["read_pages"] = await _read_pages(
             tool,
             requested_page_ids,
-            None,
             args.focus,
-            args.related_links_limit,
-            args.max_chars,
         )
 
     if args.read_urls:
-        payload["read_pages"] = await _read_pages(
-            tool,
-            [],
-            _read_urls_from_args(args),
-            args.focus,
-            args.related_links_limit,
-            args.max_chars,
+        payload["read_urls"] = await _read_urls(
+            tool, _read_urls_from_args(args), args.focus
         )
 
     return payload

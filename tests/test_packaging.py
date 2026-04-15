@@ -238,8 +238,9 @@ def test_mcp_module_help_smoke() -> None:
 def test_mcp_server_exposes_expected_tools() -> None:
     async def scenario() -> None:
         server = build_mcp_server()
-        tool_names = sorted(tool.name for tool in await server.list_tools())
-        assert tool_names == ["read_pages", "search_web"], tool_names
+        tools = await server.list_tools()
+        tool_names = sorted(tool.name for tool in tools)
+        assert tool_names == ["read_pages", "read_urls", "search_web"], tool_names
 
     asyncio.run(scenario())
 

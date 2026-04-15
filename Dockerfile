@@ -5,7 +5,7 @@ LABEL io.modelcontextprotocol.server.name="io.github.MRNAQA/sourceweave-web-sear
       org.opencontainers.image.description="Fully local MCP server and CLI for web research" \
       org.opencontainers.image.source="https://github.com/MRNAQA/sourceweave-web-search" \
       org.opencontainers.image.url="https://github.com/MRNAQA/sourceweave-web-search" \
-      org.opencontainers.image.version="0.2.3" \
+      org.opencontainers.image.version="0.3.0" \
       org.opencontainers.image.vendor="Mohammad ElNaqa" \
       org.opencontainers.image.licenses="MIT"
 
@@ -14,6 +14,7 @@ WORKDIR /app
 ENV HOME=/tmp \
     UV_LINK_MODE=copy \
     UV_CACHE_DIR=/tmp/uv-cache \
+    PATH=/app/.venv/bin:$PATH \
     FASTMCP_HOST=0.0.0.0 \
     FASTMCP_PORT=8000
 
@@ -24,4 +25,4 @@ RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 
-CMD ["uv", "run", "sourceweave-search-mcp", "--transport", "streamable-http"]
+CMD ["sourceweave-search-mcp", "--transport", "streamable-http"]
