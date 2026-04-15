@@ -1152,7 +1152,7 @@ class Tools:
 
     @staticmethod
     def _public_page_result(result: Mapping[str, Any]) -> dict[str, Any]:
-        public_result = {
+        public_result: dict[str, Any] = {
             "page_id": str(result.get("page_id", "") or ""),
             "url": str(result.get("url", "") or ""),
             "title": str(result.get("title", "") or ""),
