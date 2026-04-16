@@ -16,12 +16,13 @@
 
 ## Verification
 - If you touch runtime, packaging, or release surfaces, mirror the `release-gate` order:
-1. `uv run python scripts/sync_release_metadata.py --check`
-2. `uv run sourceweave-build-openwebui --check`
-3. `uv run ruff check src tests`
-4. `uv run mypy`
-5. `uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py -m "not integration"`
-- `tests/test_phase4.py` is a separate manual Crawl4AI HTTP check; it is excluded from `mypy` and the default deterministic CI gate.
+  - `uv run python scripts/sync_release_metadata.py --check`
+  - `uv run sourceweave-build-openwebui --check`
+  - `uv run ruff check src tests`
+  - `uv run pyright src tests`
+  - `uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py -m "not integration"`
+- For a quick local typecheck, use `uvx pyright src tests`; keep `uv run pyright src tests` as the deterministic gate.
+- `tests/test_phase4.py` is a separate manual Crawl4AI HTTP check; it is excluded from `pyright` and the default deterministic CI gate.
 
 ## Fast Checks
 - Runtime smoke: `uv run sourceweave-search --query "python programming" --read-first-pages 2 --pretty`

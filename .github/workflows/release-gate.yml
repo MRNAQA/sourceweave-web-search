@@ -92,8 +92,8 @@ jobs:
       - name: Run lint checks
         run: uv run ruff check src tests
 
-      - name: Run type checks
-        run: uv run mypy
+      - name: Run pyright checks
+        run: uv run pyright src tests
 
       - name: Run deterministic packaging and runtime tests
         run: uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py -m "not integration"

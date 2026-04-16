@@ -119,7 +119,7 @@ docker compose run --rm mcp uv run sourceweave-search \
 ```bash
 uv run pytest tests/test_tool.py tests/test_config.py tests/test_packaging.py -q -p no:cacheprovider
 uv run ruff check src tests
-uv run mypy
+uv run pyright src tests
 docker compose run --rm mcp uv run python tests/test_phase4.py
 ```
 

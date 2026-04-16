@@ -107,7 +107,7 @@ uv run python scripts/sync_release_metadata.py --check
 uv run sourceweave-build-openwebui --check
 uv run pytest tests/test_tool.py tests/test_config.py tests/test_packaging.py -q -p no:cacheprovider
 uv run ruff check src tests
-uv run mypy
+uv run pyright src tests
 uv build --no-sources --sdist --wheel --out-dir dist/release-check --clear --no-create-gitignore
 docker build -t sourceweave-web-search-mcp:release-check .
 ```
@@ -143,7 +143,7 @@ uv run python scripts/sync_release_metadata.py --check
 uv run sourceweave-build-openwebui --check
 uv run pytest tests/test_tool.py tests/test_config.py tests/test_packaging.py -q -p no:cacheprovider
 uv run ruff check src tests
-uv run mypy
+uv run pyright src tests
 uv build --no-sources --sdist --wheel --out-dir dist/release-check --clear --no-create-gitignore
 ```
 

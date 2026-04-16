@@ -67,7 +67,7 @@ uv run python scripts/sync_release_metadata.py --check
 uv run sourceweave-build-openwebui --check
 uv run pytest tests/test_tool.py tests/test_config.py tests/test_packaging.py -q -p no:cacheprovider
 uv run ruff check src tests
-uv run mypy
+uv run pyright src tests
 ```
 
 Additional repo-local runtime check:
