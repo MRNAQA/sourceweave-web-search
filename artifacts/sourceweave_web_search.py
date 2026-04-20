@@ -55,9 +55,9 @@ _TTL_RULES = [
 ]
 _DEFAULT_PAGE_TTL = 86400
 _PAGE_CACHE_VERSION = "v6"
-_SEARXNG_HOST_FALLBACK = "http://127.0.0.1:19080/search?format=json&q=<query>"
-_CRAWL4AI_HOST_FALLBACK = "http://127.0.0.1:19235"
-_REDIS_HOST_FALLBACK = "redis://127.0.0.1:16379/2"
+_SEARXNG_HOST_FALLBACK = "http://searxng:8080/search?format=json&q=<query>"
+_CRAWL4AI_HOST_FALLBACK = "http://crawl4ai:11235"
+_REDIS_HOST_FALLBACK = "redis://redis:6379/2"
 _PAGE_QUALITY_CHALLENGE_PATTERNS = (
     "prove your humanity",
     "verify you are human",

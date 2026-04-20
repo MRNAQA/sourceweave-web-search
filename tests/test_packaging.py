@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sourceweave_web_search.build_openwebui import (
     canonical_tool_path,
     default_output_path,
+    render_openwebui_artifact_source,
 )
 from sourceweave_web_search.mcp_server import build_mcp_server
 from sourceweave_web_search.release_metadata import (
@@ -59,6 +60,9 @@ def test_openwebui_artifact_is_in_sync() -> None:
     artifact_path = default_output_path()
     artifact_before = artifact_path.read_text(encoding="utf-8")
     mtime_before = artifact_path.stat().st_mtime_ns
+    expected_artifact = render_openwebui_artifact_source(
+        canonical_tool_path().read_text(encoding="utf-8")
+    )
 
     result = subprocess.run(
         [sys.executable, "scripts/build_openwebui_tool.py", "--check"],
@@ -72,7 +76,7 @@ def test_openwebui_artifact_is_in_sync() -> None:
     assert "in sync" in result.stdout.lower(), result.stdout
     assert artifact_path.read_text(encoding="utf-8") == artifact_before
     assert artifact_path.stat().st_mtime_ns == mtime_before
-    assert artifact_before == canonical_tool_path().read_text(encoding="utf-8")
+    assert artifact_before == expected_artifact
 
 
 def test_release_metadata_is_in_sync() -> None:
@@ -149,8 +153,8 @@ def test_openwebui_build_check_reports_drift_and_recovers(tmp_path: Path) -> Non
         text=True,
     )
     assert in_sync_check.returncode == 0, in_sync_check.stderr or in_sync_check.stdout
-    assert artifact_path.read_text(encoding="utf-8") == canonical_tool_path().read_text(
-        encoding="utf-8"
+    assert artifact_path.read_text(encoding="utf-8") == render_openwebui_artifact_source(
+        canonical_tool_path().read_text(encoding="utf-8")
     )
 
 
@@ -253,3 +257,19 @@ def test_default_tool_endpoints_target_host_ports() -> None:
     )
     assert valves.CRAWL4AI_BASE_URL == "http://127.0.0.1:19235"
     assert valves.CACHE_REDIS_URL == "redis://127.0.0.1:16379/2"
+
+
+def test_rendered_openwebui_artifact_uses_container_service_endpoints() -> None:
+    rendered = render_openwebui_artifact_source(
+        canonical_tool_path().read_text(encoding="utf-8")
+    )
+
+    assert (
+        '_SEARXNG_HOST_FALLBACK = "http://searxng:8080/search?format=json&q=<query>"'
+        in rendered
+    )
+    assert '_CRAWL4AI_HOST_FALLBACK = "http://crawl4ai:11235"' in rendered
+    assert '_REDIS_HOST_FALLBACK = "redis://redis:6379/2"' in rendered
+    assert "http://127.0.0.1:19080/search?format=json&q=<query>" not in rendered
+    assert "http://127.0.0.1:19235" not in rendered
+    assert "redis://127.0.0.1:16379/2" not in rendered

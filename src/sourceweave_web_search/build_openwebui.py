@@ -1,6 +1,14 @@
 import argparse
+import re
 from pathlib import Path
 from typing import Sequence
+
+
+_OPENWEBUI_ENDPOINT_DEFAULTS = {
+    "_SEARXNG_HOST_FALLBACK": "http://searxng:8080/search?format=json&q=<query>",
+    "_CRAWL4AI_HOST_FALLBACK": "http://crawl4ai:11235",
+    "_REDIS_HOST_FALLBACK": "redis://redis:6379/2",
+}
 
 
 def canonical_tool_path() -> Path:
@@ -11,10 +19,29 @@ def default_output_path() -> Path:
     return canonical_tool_path().parents[2] / "artifacts" / "sourceweave_web_search.py"
 
 
+def render_openwebui_artifact_source(source: str) -> str:
+    rendered = source
+    for constant_name, default_value in _OPENWEBUI_ENDPOINT_DEFAULTS.items():
+        rendered, replacements = re.subn(
+            rf'^{constant_name}\s*=\s*"[^"]*"$',
+            f'{constant_name} = "{default_value}"',
+            rendered,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        if replacements != 1:
+            raise ValueError(
+                f"Could not rewrite OpenWebUI default for {constant_name}"
+            )
+    return rendered
+
+
 def build_openwebui_artifact(
     output_path: Path | None = None, check: bool = False
 ) -> bool:
-    source = canonical_tool_path().read_text(encoding="utf-8")
+    source = render_openwebui_artifact_source(
+        canonical_tool_path().read_text(encoding="utf-8")
+    )
     target = output_path or default_output_path()
 
     if check:
