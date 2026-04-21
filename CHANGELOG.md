@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.0
+
+- add `effort` guidance to `search_web` so MCP clients can choose `quick`, `normal`, or `deep` research passes with matching search depth and pagination
+- emit richer search status updates while fetching and refining results so clients can see what the tool is doing during longer research runs
+- render compose-friendly SearXNG, Crawl4AI, and Redis endpoints into the generated OpenWebUI artifact while keeping host-side package defaults unchanged
+- standardize the release quality gate on `pyright` alongside lint, packaging, and deterministic runtime checks
+
 ## 0.3.0
 
 - simplify the implementation back to the minimal public search/read behavior after reviewing the hidden internal feature paths with a KISS/YAGNI lens

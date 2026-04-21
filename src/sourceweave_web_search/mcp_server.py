@@ -1,6 +1,7 @@
 import argparse
 import os
 from typing import Annotated
+from typing import Literal
 from typing import Sequence
 
 from mcp.server.fastmcp import FastMCP
@@ -40,7 +41,7 @@ SearchUrls = Annotated[
 ]
 
 SearchEffort = Annotated[
-    str,
+    Literal["quick", "normal", "deep"],
     Field(
         description=(
             "Optional search effort. Use quick for narrow, time-sensitive, or single-answer lookups, or when urls already identify the must-read page; "

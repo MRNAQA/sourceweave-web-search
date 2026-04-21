@@ -17,7 +17,7 @@ For most users, the setup is simple:
 - MCP server with `stdio`, `sse`, and `streamable-http` transports
 - fully local web research workflow with source discovery and stable follow-up reads for MCP clients
 - automatic document conversion for PDFs and other supported documents when detected
-- lean MCP contract with `search_web`, `read_pages`, and `read_urls`
+- lean MCP contract with `search_web`, `read_pages`, and `read_urls`, plus optional search `effort` control for quick, normal, or deep discovery
 - publishable Python package, container image, and generated OpenWebUI artifact
 - compatible with OpenCode, VS Code Copilot, and other MCP clients
 
@@ -222,7 +222,7 @@ sourceweave-search-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 
 MCP clients receive a lean three-tool contract:
 
-- `search_web(query, domains?, urls?)`: discover relevant sources and get compact results with stable `page_id` handles
+- `search_web(query, domains?, urls?, effort?)`: discover relevant sources and get compact results with stable `page_id` handles
 - `read_pages(page_ids, focus?)`: read stored pages by `page_id`
 - `read_urls(urls, focus?)`: read one or more direct URLs without searching first
 
@@ -328,7 +328,7 @@ From a repo checkout, verify it is in sync with the canonical implementation:
 uv run sourceweave-build-openwebui --check
 ```
 
-Paste that artifact into OpenWebUI when you want the standalone tool-file deployment path.
+Paste that artifact into OpenWebUI when you want the standalone tool-file deployment path. The generated file rewrites the default endpoints to the repo-local compose service names so it matches the container deployment path out of the box.
 
 ## Defaults
 

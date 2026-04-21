@@ -3,7 +3,7 @@ title: SourceWeave Web Search
 description: Search-first web research tool with compact source discovery in search_web plus stable follow-up reads through read_pages and read_urls. Uses SearXNG for discovery, Crawl4AI for extraction, and MarkItDown for document conversion.
 author: Mohammad ElNaqa
 author_url: https://github.com/MRNAQA
-version: 0.3.0
+version: 0.4.0
 license: MIT
 requirements: aiohttp, loguru, markitdown, redis>=5.0
 

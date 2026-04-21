@@ -257,6 +257,9 @@ def test_mcp_search_tool_exposes_effort_guidance() -> None:
         properties = search_tool.inputSchema["properties"]
 
         assert "effort" in properties, search_tool.inputSchema
+        assert properties["effort"]["enum"] == ["quick", "normal", "deep"], properties[
+            "effort"
+        ]
         assert properties["effort"]["default"] == "normal", properties["effort"]
         assert properties["effort"]["description"]
         assert "Use quick for narrow, time-sensitive, or single-answer lookups" in properties["effort"]["description"]
