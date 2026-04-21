@@ -118,14 +118,14 @@ async def _read_pages(tool: Any, page_ids: list[str], focus: str) -> Any:
     if not page_ids:
         return None
 
-    return await tool.mcp_read_pages(page_ids=page_ids, focus=focus)
+    return await tool.read_pages(page_ids=page_ids, focus=focus)
 
 
 async def _read_urls(tool: Any, urls: list[str] | None, focus: str) -> Any:
     if not urls:
         return None
 
-    return await tool.mcp_read_urls(urls=urls, focus=focus)
+    return await tool.read_urls(urls=urls, focus=focus)
 
 
 async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
@@ -136,7 +136,7 @@ async def run_cli(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {}
 
     if args.query:
-        results = await tool.mcp_search_web(
+        results = await tool.search_web(
             query=args.query,
             domains=args.domains or None,
             urls=_urls_from_args(args),

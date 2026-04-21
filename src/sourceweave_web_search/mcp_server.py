@@ -105,7 +105,7 @@ def build_mcp_server(
         domains: SearchDomains = None,
         urls: SearchUrls = None,
     ):
-        return await tool_instance.mcp_search_web(
+        return await tool_instance.search_web(
             query=query,
             domains=domains,
             urls=urls,
@@ -122,7 +122,7 @@ def build_mcp_server(
         page_ids: ReadPageIds,
         focus: ReadFocus = "",
     ):
-        return await tool_instance.mcp_read_pages(
+        return await tool_instance.read_pages(
             page_ids=page_ids,
             focus=focus,
         )
@@ -138,7 +138,7 @@ def build_mcp_server(
         urls: ReadUrls,
         focus: ReadFocus = "",
     ):
-        return await tool_instance.mcp_read_urls(
+        return await tool_instance.read_urls(
             urls=urls,
             focus=focus,
         )

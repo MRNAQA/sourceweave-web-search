@@ -115,7 +115,7 @@ async def _store_test_page(
 def test_search_and_read_round_trip() -> None:
     async def scenario() -> None:
         tool = Tools()
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="python programming",
             depth="quick",
             max_results=2,
@@ -139,7 +139,7 @@ def test_search_and_read_round_trip() -> None:
         ):
             assert key in first, f"missing key '{key}' in result: {first}"
 
-        page = await tool.read_pages(first["page_id"], max_chars=1200)
+        page = await tool._read_pages_internal(first["page_id"], max_chars=1200)
         assert "error" not in page, page
         assert len(page.get("content", "")) >= 200, page
 
@@ -150,7 +150,7 @@ def test_search_and_read_round_trip() -> None:
 def test_read_pages_works_from_fresh_tool_instance() -> None:
     async def scenario() -> None:
         tool = Tools()
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="asyncio python tutorial",
             depth="quick",
             max_results=1,
@@ -162,7 +162,7 @@ def test_read_pages_works_from_fresh_tool_instance() -> None:
 
         page_id = results[0]["page_id"]
         fresh_tool = Tools()
-        page = await fresh_tool.read_pages(page_id, max_chars=1000)
+        page = await fresh_tool._read_pages_internal(page_id, max_chars=1000)
         assert "error" not in page, page
         assert len(page.get("content", "")) >= 200, page
 
@@ -188,7 +188,9 @@ def test_read_pages_accepts_multiple_page_ids_in_one_call(
             "# Beta\n\nBeta content paragraph with enough text to be useful for a multi-page read.",
         )
 
-        pages = await tool.read_pages([first_page_id, second_page_id], max_chars=200)
+        pages = await tool._read_pages_internal(
+            [first_page_id, second_page_id], max_chars=200
+        )
 
         assert "error" not in pages, pages
         assert pages["requested_page_ids"] == [first_page_id, second_page_id], pages
@@ -236,7 +238,7 @@ def test_read_pages_accepts_direct_url_without_search(
 
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        page = await tool.read_pages(urls=[url], max_chars=500)
+        page = await tool._read_pages_internal(urls=[url], max_chars=500)
 
         assert page["url"] == url, page
         assert "error" not in page, page
@@ -275,7 +277,7 @@ def test_read_pages_accepts_direct_document_url_with_conversion(
 
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
 
-        page = await tool.read_pages(urls=[pdf_url], max_chars=500)
+        page = await tool._read_pages_internal(urls=[pdf_url], max_chars=500)
 
         assert fetch_calls == [pdf_url], fetch_calls
         assert page["url"] == pdf_url, page
@@ -305,7 +307,7 @@ def test_read_pages_returns_error_when_direct_document_conversion_fails(
 
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
 
-        page = await tool.read_pages(urls=[pdf_url], max_chars=500)
+        page = await tool._read_pages_internal(urls=[pdf_url], max_chars=500)
 
         assert page == {"error": f"Failed to read URL '{pdf_url}'."}, page
 
@@ -325,7 +327,9 @@ def test_read_pages_multi_returns_partial_errors_for_missing_ids(
             "# Gamma\n\nGamma content paragraph with enough text to survive truncation.",
         )
 
-        pages = await tool.read_pages([first_page_id, "missing-page-id"], max_chars=200)
+        pages = await tool._read_pages_internal(
+            [first_page_id, "missing-page-id"], max_chars=200
+        )
 
         assert pages["returned_pages"] == 1, pages
         assert len(pages["pages"]) == 1, pages
@@ -364,7 +368,7 @@ def test_read_pages_returns_content_state_and_related_assets(
             images=[{"url": "https://example.com/image.png", "alt": "Guide image"}],
         )
 
-        page = await tool.read_pages(
+        page = await tool._read_pages_internal(
             page_id,
             focus="focus extraction",
             related_links_limit=1,
@@ -438,7 +442,7 @@ def test_search_web_and_read_pages_mark_challenge_pages() -> None:
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
         try:
-            results = await tool.search_web(
+            results = await tool._search_web_internal(
                 query="react useEffect cleanup",
                 depth="quick",
                 max_results=1,
@@ -446,7 +450,7 @@ def test_search_web_and_read_pages_mark_challenge_pages() -> None:
             )
             assert results[0]["page_quality"] == "challenge", results
 
-            page = await tool.read_pages(results[0]["page_id"], max_chars=400)
+            page = await tool._read_pages_internal(results[0]["page_id"], max_chars=400)
             assert page["page_quality"] == "challenge", page
         finally:
             monkeypatch.undo()
@@ -470,7 +474,7 @@ def test_read_pages_marks_blocked_pages(
             full_content_available=True,
         )
 
-        page = await tool.read_pages(page_id, max_chars=500)
+        page = await tool._read_pages_internal(page_id, max_chars=500)
 
         assert page["page_quality"] == "blocked", page
 
@@ -578,7 +582,7 @@ def test_explicit_urls_preserve_input_order_ahead_of_search_results(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="python reference pages",
             urls=explicit_urls,
             depth="quick",
@@ -641,7 +645,7 @@ def test_explicit_url_failure_returns_search_only_fallback(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="python about page",
             urls=[explicit_url],
             depth="quick",
@@ -673,7 +677,7 @@ def test_search_web_returns_empty_list_when_no_candidates(
 
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="nothing should be found",
             depth="quick",
             fresh=True,
@@ -741,7 +745,7 @@ def test_search_web_uses_single_search_call_and_preserves_order(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query=query,
             depth="quick",
             max_results=3,
@@ -810,7 +814,7 @@ def test_search_web_fetches_html_pages_one_by_one(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=2,
@@ -865,7 +869,7 @@ def test_search_web_falls_back_to_search_snippet_when_crawl_fails(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -948,7 +952,7 @@ def test_search_web_records_metadata_for_per_url_failures(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=2,
@@ -1022,13 +1026,13 @@ def test_search_web_reuses_cached_crawled_page_record(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        first_results = await tool.search_web(
+        first_results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
             fresh=False,
         )
-        second_results = await tool.search_web(
+        second_results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -1086,7 +1090,7 @@ def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        first_results = await tool.search_web(
+        first_results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -1122,7 +1126,7 @@ def test_search_web_does_not_reuse_search_only_fallback_as_full_page_cache(
 
         monkeypatch.setattr(tool, "_crawl_url", succeeding_crawl)
 
-        second_results = await tool.search_web(
+        second_results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -1190,13 +1194,13 @@ def test_search_web_reuses_redirected_page_for_original_url(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        first_results = await tool.search_web(
+        first_results = await tool._search_web_internal(
             query="latest docs",
             depth="quick",
             max_results=1,
             fresh=False,
         )
-        second_results = await tool.search_web(
+        second_results = await tool._search_web_internal(
             query="latest docs",
             depth="quick",
             max_results=1,
@@ -1267,7 +1271,7 @@ def test_search_web_auto_converts_explicit_document_urls(
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="guide pdf",
             urls=[pdf_url],
             depth="quick",
@@ -1330,7 +1334,7 @@ def test_search_web_auto_converts_document_search_results(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_fetch_document", fake_fetch_document)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="guide pdf",
             depth="quick",
             max_results=1,
@@ -1397,7 +1401,7 @@ def test_search_web_honors_site_filters_after_search_provider_results(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="site:docs.python.org asyncio",
             depth="quick",
             max_results=5,
@@ -1483,15 +1487,15 @@ def test_read_pages_apply_related_links_limit_and_can_omit_links(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        search_results = await tool.search_web(
+        search_results = await tool._search_web_internal(
             query="primary guide",
             depth="quick",
             max_results=1,
             fresh=True,
         )
         page_id = search_results[0]["page_id"]
-        default_links = await tool.read_pages(page_id, related_links_limit=3)
-        no_links = await tool.read_pages(page_id, related_links_limit=0)
+        default_links = await tool._read_pages_internal(page_id, related_links_limit=3)
+        no_links = await tool._read_pages_internal(page_id, related_links_limit=0)
 
         assert "related_links" not in search_results[0], search_results[0]
         assert search_results[0]["images"] == images, search_results[0]
@@ -1558,7 +1562,7 @@ def test_read_pages_reuse_content_from_initial_crawl(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="react useEffect cleanup example official documentation",
             depth="quick",
             max_results=1,
@@ -1566,7 +1570,7 @@ def test_read_pages_reuse_content_from_initial_crawl(
         )
         page_id = results[0]["page_id"]
 
-        pages = await tool.read_pages([page_id], max_chars=500)
+        pages = await tool._read_pages_internal([page_id], max_chars=500)
 
         assert crawl_calls == [[search_url]], crawl_calls
         assert pages["returned_pages"] == 1, pages
@@ -1710,7 +1714,9 @@ def test_crawl_url_stores_content_with_links_preserved(
         assert result["content"][0]["redirected_url"] == "https://docs.pypi.org/"
         assert result["content"][0]["status_code"] == 200
         assert "Skip to content" not in result["content"][0]["summary"]
-        page = await tool.read_pages(result["content"][0]["page_id"], max_chars=500)
+        page = await tool._read_pages_internal(
+            result["content"][0]["page_id"], max_chars=500
+        )
         assert "[Warehouse documentation]" in page["content"], page
         assert page["redirected_url"] == "https://docs.pypi.org/"
         assert page["status_code"] == 200
@@ -1806,7 +1812,7 @@ def test_read_pages_direct_url_ignores_legacy_page_cache_key(
         monkeypatch.setattr(tool._cache, "setex", fake_setex)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        page = await tool.read_pages(urls=[url], max_chars=500)
+        page = await tool._read_pages_internal(urls=[url], max_chars=500)
 
         assert crawl_calls == [[url]], crawl_calls
         assert "[Warehouse documentation]" in page["content"], page
@@ -1822,7 +1828,7 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
                 "crawl": {"failed": 1},
             }
 
-        async def mcp_search_web(
+        async def search_web(
             self, *args: Any, **kwargs: Any
         ) -> list[dict[str, Any]]:
             _ = args, kwargs
@@ -1836,7 +1842,7 @@ def test_cli_can_include_search_metadata(monkeypatch: pytest.MonkeyPatch) -> Non
                 }
             ]
 
-        async def mcp_read_pages(self, *args: Any, **kwargs: Any) -> None:
+        async def read_pages(self, *args: Any, **kwargs: Any) -> None:
             _ = args, kwargs
             return None
 
@@ -1860,7 +1866,7 @@ def test_cli_reads_direct_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeTool:
         last_query_metadata: dict[str, Any] = {}
 
-        async def mcp_read_urls(
+        async def read_urls(
             self, *args: Any, **kwargs: Any
         ) -> list[dict[str, Any]]:
             captured_read_kwargs["args"] = args
@@ -1901,7 +1907,7 @@ def test_cli_passes_plain_url_strings_and_domains(
     class FakeTool:
         last_query_metadata: dict[str, Any] = {}
 
-        async def mcp_search_web(
+        async def search_web(
             self, *args: Any, **kwargs: Any
         ) -> list[dict[str, Any]]:
             _ = args
@@ -1916,7 +1922,7 @@ def test_cli_passes_plain_url_strings_and_domains(
                 }
             ]
 
-        async def mcp_read_pages(
+        async def read_pages(
             self, *args: Any, **kwargs: Any
         ) -> list[dict[str, Any]]:
             captured_read_kwargs["args"] = args
@@ -2036,7 +2042,7 @@ def test_search_web_honors_requested_max_results_above_default(
         monkeypatch.setattr(tool, "_search_searxng", fake_search)
         monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
 
-        results = await tool.search_web(
+        results = await tool._search_web_internal(
             query="free gold price api no key historical data",
             depth="normal",
             max_results=8,
@@ -2045,6 +2051,129 @@ def test_search_web_honors_requested_max_results_above_default(
 
         assert isinstance(results, list), results
         assert len(results) == 8, results
+
+    asyncio.run(scenario())
+
+
+def test_search_web_emits_search_level_status_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        events: list[dict[str, Any]] = []
+
+        async def fake_emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        async def fake_search(
+            query_value: str, __event_emitter__: Any = None
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            return [
+                tool._build_candidate(
+                    "https://docs.example.com/guide",
+                    title="Guide",
+                    snippet="Guide snippet.",
+                    search_rank=1,
+                )
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, cache_mode, __event_emitter__
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        urls_to_fetch[0],
+                        "Guide",
+                        "# Guide\n\nGuide content.",
+                        query or "",
+                        source_type=source_type,
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool._search_web_internal(
+            query="guide",
+            depth="quick",
+            max_results=1,
+            fresh=True,
+            __event_emitter__=fake_emit,
+        )
+
+        assert len(results) == 1, results
+        status_events = [event for event in events if event.get("type") == "status"]
+        assert [event["data"]["description"] for event in status_events] == [
+            "Searching web sources...",
+            "Found 1 candidate; reading up to 1 page...",
+            "Prepared 1 result from 1 page.",
+        ], status_events
+        assert [event["data"]["done"] for event in status_events] == [
+            False,
+            False,
+            True,
+        ], status_events
+
+    asyncio.run(scenario())
+
+
+def test_read_pages_only_emits_per_page_status_when_more_status_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        _install_memory_cache(monkeypatch, tool)
+        page_id = await _store_test_page(
+            tool,
+            "https://example.com/guide",
+            "Guide",
+            "# Guide\n\nDetailed guide content for event assertions.",
+        )
+
+        quiet_events: list[dict[str, Any]] = []
+
+        async def quiet_emit(event: dict[str, Any]) -> None:
+            quiet_events.append(event)
+
+        quiet_result = await tool._read_pages_internal(
+            page_id,
+            __event_emitter__=quiet_emit,
+        )
+
+        tool.valves.MORE_STATUS = True
+        verbose_events: list[dict[str, Any]] = []
+
+        async def verbose_emit(event: dict[str, Any]) -> None:
+            verbose_events.append(event)
+
+        verbose_result = await tool._read_pages_internal(
+            page_id,
+            __event_emitter__=verbose_emit,
+        )
+
+        assert quiet_result["page_id"] == page_id, quiet_result
+        assert verbose_result["page_id"] == page_id, verbose_result
+        assert [event["type"] for event in quiet_events] == ["citation"], quiet_events
+        assert [event["type"] for event in verbose_events] == [
+            "status",
+            "citation",
+        ], verbose_events
+        assert verbose_events[0]["data"] == {
+            "description": "Read Guide...",
+            "done": True,
+        }, verbose_events
 
     asyncio.run(scenario())
 

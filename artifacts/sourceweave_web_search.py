@@ -1250,6 +1250,24 @@ class Tools:
             {"provider": provider, "error": error}
         )
 
+    async def _emit_status(
+        self,
+        description: str,
+        *,
+        done: bool,
+        __event_emitter__: EventEmitter = None,
+    ) -> None:
+        if __event_emitter__:
+            await __event_emitter__(
+                {
+                    "type": "status",
+                    "data": {
+                        "description": description,
+                        "done": done,
+                    },
+                }
+            )
+
     async def _search_only_fallback_results(
         self,
         ranked_candidates: list[dict[str, Any]],
@@ -1719,15 +1737,11 @@ class Tools:
     ) -> dict[str, Any]:
         page_id = str(record.get("page_id") or self._page_id_for_url(record["url"]))
 
-        if __event_emitter__:
-            await __event_emitter__(
-                {
-                    "type": "status",
-                    "data": {
-                        "description": f"Read {record['title'][:60]}...",
-                        "done": True,
-                    },
-                }
+        if self.valves.MORE_STATUS:
+            await self._emit_status(
+                f"Read {record['title'][:60]}...",
+                done=True,
+                __event_emitter__=__event_emitter__,
             )
 
         full_content = self._page_record_content(record)
@@ -1935,7 +1949,7 @@ class Tools:
             __event_emitter__=__event_emitter__,
         )
 
-    async def read_pages(
+    async def _read_pages_internal(
         self,
         page_ids: Union[str, List[str], None] = None,
         urls: Union[str, list[Any], None] = None,
@@ -2038,13 +2052,13 @@ class Tools:
             response["requested_urls"] = normalized_url_strings
         return response
 
-    async def mcp_read_pages(
+    async def read_pages(
         self,
         page_ids: list[str],
         focus: str = "",
         __event_emitter__: EventEmitter = None,
     ) -> list[dict[str, Any]]:
-        results = await self.read_pages(
+        results = await self._read_pages_internal(
             page_ids=page_ids,
             focus=focus,
             __event_emitter__=__event_emitter__,
@@ -2061,13 +2075,13 @@ class Tools:
             return [self._public_page_result(results)]
         return []
 
-    async def mcp_read_urls(
+    async def read_urls(
         self,
         urls: list[str],
         focus: str = "",
         __event_emitter__: EventEmitter = None,
     ) -> list[dict[str, Any]]:
-        results = await self.read_pages(
+        results = await self._read_pages_internal(
             urls=urls,
             focus=focus,
             __event_emitter__=__event_emitter__,
@@ -2108,26 +2122,26 @@ class Tools:
         site_tokens = " ".join(f"site:{domain}" for domain in domains)
         return f"{query} {site_tokens}".strip()
 
-    async def mcp_search_web(
+    async def search_web(
         self,
         query: str,
         domains: Optional[list[str]] = None,
         urls: Optional[list[str]] = None,
         __event_emitter__: EventEmitter = None,
     ) -> list[dict[str, Any]]:
-        results = await self.search_web(
+        results = await self._search_web_internal(
             query=self._append_site_filters(
                 self._normalize_query(query), self._normalize_domains(domains)
             ),
             urls=urls,
-            depth="normal",
+            depth="deep",
             max_results=None,
             fresh=False,
             __event_emitter__=__event_emitter__,
         )
         return [self._public_search_result(result) for result in results]
 
-    async def search_web(
+    async def _search_web_internal(
         self,
         query: str,
         urls: Optional[List[Any]] = None,
@@ -2178,6 +2192,12 @@ class Tools:
                     }
                 )
 
+            await self._emit_status(
+                "Searching web sources...",
+                done=False,
+                __event_emitter__=__event_emitter__,
+            )
+
             search_cache_key = self._search_cache_key(query)
             cached_search = None if fresh else await self._cache.get(search_cache_key)
             search_candidates: list[dict[str, Any]] = []
@@ -2227,6 +2247,11 @@ class Tools:
             ]
             self.total_urls = len(ranked_candidates)
             if not ranked_candidates:
+                await self._emit_status(
+                    "No matching sources found.",
+                    done=True,
+                    __event_emitter__=__event_emitter__,
+                )
                 self._active_query_metadata = None
                 query_metadata["result_count"] = 0
                 return []
@@ -2238,6 +2263,14 @@ class Tools:
                     effective_return_limit + budget["crawl_slack"],
                     len(explicit_targets),
                 ),
+            )
+            planned_reads = min(crawl_limit, len(ranked_candidates))
+            candidate_label = "candidate" if len(ranked_candidates) == 1 else "candidates"
+            page_label = "page" if planned_reads == 1 else "pages"
+            await self._emit_status(
+                f"Found {len(ranked_candidates)} {candidate_label}; reading up to {planned_reads} {page_label}...",
+                done=False,
+                __event_emitter__=__event_emitter__,
             )
             crawl_results: list[dict[str, Any]] = []
             attempted_fetches = 0
@@ -2359,6 +2392,15 @@ class Tools:
             )
             if finalized_results:
                 query_metadata["result_count"] = len(finalized_results)
+                result_label = (
+                    "result" if len(finalized_results) == 1 else "results"
+                )
+                page_label = "page" if len(crawl_results) == 1 else "pages"
+                await self._emit_status(
+                    f"Prepared {len(finalized_results)} {result_label} from {len(crawl_results)} {page_label}.",
+                    done=True,
+                    __event_emitter__=__event_emitter__,
+                )
                 self._active_query_metadata = None
                 return finalized_results
 
@@ -2369,10 +2411,23 @@ class Tools:
                     effective_return_limit,
                 )
                 query_metadata["result_count"] = len(fallback_results)
+                result_label = (
+                    "result" if len(fallback_results) == 1 else "results"
+                )
+                await self._emit_status(
+                    f"Crawl degraded; returning {len(fallback_results)} search-only {result_label}.",
+                    done=True,
+                    __event_emitter__=__event_emitter__,
+                )
                 self._active_query_metadata = None
                 return fallback_results
 
             query_metadata["result_count"] = 0
+            await self._emit_status(
+                "No readable sources found.",
+                done=True,
+                __event_emitter__=__event_emitter__,
+            )
             self._active_query_metadata = None
             return []
         finally:
