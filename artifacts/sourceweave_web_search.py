@@ -8,7 +8,7 @@ license: MIT
 requirements: aiohttp, loguru, markitdown, redis>=5.0
 
 Three-tool architecture:
-    search_web(query, domains?, urls?) -> compact summaries + page_ids for source discovery
+    search_web(query, domains?, urls?, effort?) -> compact summaries + page_ids for source discovery
     read_pages(page_ids, focus?) -> cleaned page content for one or more stored pages
     read_urls(urls, focus?) -> cleaned page content for one or more direct URLs
 
@@ -437,6 +437,8 @@ class Tools:
                     "description": (
                         "Search the web for relevant sources and return compact summaries with stable page_ids for follow-up reads. "
                         "Use this when you need source discovery before reading full pages. "
+                        "Choose effort deliberately: quick for narrow current-fact lookups or explicit URLs, normal for most docs and troubleshooting, "
+                        "and deep for broad comparisons or synthesis-heavy research. "
                         "Pass domains when you want to constrain results to specific hosts. "
                         "If you already know an important URL, pass it in urls so it is included in the same search pass."
                     ),
@@ -461,6 +463,18 @@ class Tools:
                                 "description": "Optional specific URLs to include alongside discovered search results. Pass plain URL strings.",
                                 "items": {"type": "string"},
                                 "default": [],
+                            },
+                            "effort": {
+                                "type": "string",
+                                "enum": ["quick", "normal", "deep"],
+                                "default": "normal",
+                                "description": (
+                                    "Optional search effort. Use quick for narrow, time-sensitive, or single-answer lookups, or when urls already identify the must-read page; "
+                                    "examples: weather forecast, stock price, today's exchange rate, or reading one known URL. "
+                                    "Use normal for most docs lookup, troubleshooting, and focused research; examples: Python requests timeout error, React useEffect cleanup, API docs for OAuth refresh tokens. "
+                                    "Use deep for broad, ambiguous, or synthesis-heavy research; examples: compare vector databases, research browser automation tools, summarize the current landscape of local RAG stacks. "
+                                    "Avoid deep for simple weather-like lookups."
+                                ),
                             },
                         },
                         "required": ["query"],
@@ -1414,55 +1428,75 @@ class Tools:
         if self.valves.SEARXNG_API_TOKEN:
             headers["Authorization"] = f"Bearer {self.valves.SEARXNG_API_TOKEN}"
 
+        result_limit = self.user_valves.SEARXNG_MAX_RESULTS
+        if result_limit is None:
+            result_limit = self.valves.SEARXNG_MAX_RESULTS
+
         last_exc: Exception | None = None
         for base_url in self._http_url_variants(self.valves.SEARXNG_BASE_URL):
-            url = base_url.replace("<query>", quote_plus(normalized_query))
+            structured_results: list[dict[str, Any]] = []
+            seen_urls: set[str] = set()
             try:
                 timeout = aiohttp.ClientTimeout(total=self.valves.SEARXNG_TIMEOUT)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    if self.valves.SEARXNG_METHOD == "POST":
-                        async with session.post(
-                            url, data={"q": query, "format": "json"}, headers=headers
-                        ) as resp:
-                            resp.raise_for_status()
-                            data = await resp.json()
-                    else:
-                        async with session.get(url, headers=headers) as resp:
-                            resp.raise_for_status()
-                            data = await resp.json()
-                results = data.get("results", [])
-                if self.valves.DEBUG:
-                    logger.info(
-                        f"SearXNG returned {len(results)} raw results for query={normalized_query!r}"
-                    )
-                max_results = (
-                    self.user_valves.SEARXNG_MAX_RESULTS
-                    or self.valves.SEARXNG_MAX_RESULTS
-                )
-                structured_results = []
-                for rank, result in enumerate(results[:max_results], start=1):
-                    if not result.get("url"):
-                        continue
-                    engines = result.get("engines") or []
-                    if isinstance(engines, list):
-                        engine = ", ".join(engine for engine in engines if engine)
-                    else:
-                        engine = str(engines or "")
-                    structured_results.append(
-                        self._build_candidate(
-                            result["url"],
-                            title=str(result.get("title", "") or ""),
-                            snippet=str(
-                                result.get("content")
-                                or result.get("snippet")
-                                or result.get("description")
-                                or ""
-                            ),
-                            search_rank=rank,
-                            engine=result.get("engine") or engine or None,
-                            source_type="search_result",
-                        )
-                    )
+                    for page_number in range(1, max(2, result_limit + 1)):
+                        url = base_url.replace("<query>", quote_plus(normalized_query))
+                        if page_number > 1:
+                            separator = "&" if "?" in url else "?"
+                            url = f"{url}{separator}pageno={page_number}"
+                        if self.valves.SEARXNG_METHOD == "POST":
+                            request_data = {"q": query, "format": "json"}
+                            if page_number > 1:
+                                request_data["pageno"] = str(page_number)
+                            async with session.post(
+                                url, data=request_data, headers=headers
+                            ) as resp:
+                                resp.raise_for_status()
+                                data = await resp.json()
+                        else:
+                            async with session.get(url, headers=headers) as resp:
+                                resp.raise_for_status()
+                                data = await resp.json()
+                        results = data.get("results", [])
+                        if self.valves.DEBUG:
+                            logger.info(
+                                f"SearXNG returned {len(results)} raw results for query={normalized_query!r} page={page_number}"
+                            )
+                        if not results:
+                            break
+
+                        new_results = 0
+                        for result in results:
+                            result_url = str(result.get("url") or "")
+                            if not result_url or result_url in seen_urls:
+                                continue
+                            seen_urls.add(result_url)
+                            new_results += 1
+                            engines = result.get("engines") or []
+                            if isinstance(engines, list):
+                                engine = ", ".join(engine for engine in engines if engine)
+                            else:
+                                engine = str(engines or "")
+                            structured_results.append(
+                                self._build_candidate(
+                                    result_url,
+                                    title=str(result.get("title", "") or ""),
+                                    snippet=str(
+                                        result.get("content")
+                                        or result.get("snippet")
+                                        or result.get("description")
+                                        or ""
+                                    ),
+                                    search_rank=len(structured_results) + 1,
+                                    engine=result.get("engine") or engine or None,
+                                    source_type="search_result",
+                                )
+                            )
+                            if len(structured_results) >= result_limit:
+                                break
+
+                        if len(structured_results) >= result_limit or new_results == 0:
+                            break
                 return structured_results
             except Exception as exc:
                 last_exc = exc
@@ -2127,14 +2161,16 @@ class Tools:
         query: str,
         domains: Optional[list[str]] = None,
         urls: Optional[list[str]] = None,
+        effort: Literal["quick", "normal", "deep"] = "normal",
         __event_emitter__: EventEmitter = None,
     ) -> list[dict[str, Any]]:
+        selected_depth = effort if effort in self._depth_budgets else "normal"
         results = await self._search_web_internal(
             query=self._append_site_filters(
                 self._normalize_query(query), self._normalize_domains(domains)
             ),
             urls=urls,
-            depth="deep",
+            depth=selected_depth,
             max_results=None,
             fresh=False,
             __event_emitter__=__event_emitter__,
@@ -2214,10 +2250,26 @@ class Tools:
                 self._cache_stats["search_misses"] += 1
                 if self.valves.SEARCH_WITH_SEARXNG:
                     try:
-                        search_candidates = await asyncio.wait_for(
-                            self._search_searxng(query, __event_emitter__),
-                            timeout=min(budget["search_timeout"], time_left()),
+                        previous_search_max_results = (
+                            self.user_valves.SEARXNG_MAX_RESULTS
                         )
+                        if previous_search_max_results is None:
+                            self.user_valves.SEARXNG_MAX_RESULTS = max(
+                                budget["search_candidates"],
+                                requested_results or 0,
+                            )
+                        try:
+                            search_candidates = await asyncio.wait_for(
+                                self._search_searxng(
+                                    query,
+                                    __event_emitter__=__event_emitter__,
+                                ),
+                                timeout=min(budget["search_timeout"], time_left()),
+                            )
+                        finally:
+                            self.user_valves.SEARXNG_MAX_RESULTS = (
+                                previous_search_max_results
+                            )
                     except asyncio.TimeoutError:
                         logger.warning(
                             "SearXNG timed out, proceeding with what we have"

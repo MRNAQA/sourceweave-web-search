@@ -249,6 +249,24 @@ def test_mcp_server_exposes_expected_tools() -> None:
     asyncio.run(scenario())
 
 
+def test_mcp_search_tool_exposes_effort_guidance() -> None:
+    async def scenario() -> None:
+        server = build_mcp_server()
+        tools = await server.list_tools()
+        search_tool = next(tool for tool in tools if tool.name == "search_web")
+        properties = search_tool.inputSchema["properties"]
+
+        assert "effort" in properties, search_tool.inputSchema
+        assert properties["effort"]["default"] == "normal", properties["effort"]
+        assert properties["effort"]["description"]
+        assert "Use quick for narrow, time-sensitive, or single-answer lookups" in properties["effort"]["description"]
+        assert "Use normal for most docs lookup, troubleshooting, and focused research" in properties["effort"]["description"]
+        assert "Use deep for broad, ambiguous, or synthesis-heavy research" in properties["effort"]["description"]
+        assert "Avoid deep for simple weather-like lookups." in properties["effort"]["description"]
+
+    asyncio.run(scenario())
+
+
 def test_default_tool_endpoints_target_host_ports() -> None:
     valves = Tools.Valves()
 

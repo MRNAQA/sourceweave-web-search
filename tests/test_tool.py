@@ -2055,6 +2055,206 @@ def test_search_web_honors_requested_max_results_above_default(
     asyncio.run(scenario())
 
 
+def test_public_search_web_defaults_to_normal_and_passes_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        captured_calls: list[dict[str, Any]] = []
+
+        async def fake_search_internal(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            _ = args
+            captured_calls.append(kwargs)
+            return [
+                {
+                    "url": "https://example.com/guide",
+                    "title": "Guide",
+                    "page_id": "page123",
+                    "summary": "Guide summary",
+                    "key_points": ["Guide summary"],
+                }
+            ]
+
+        monkeypatch.setattr(tool, "_search_web_internal", fake_search_internal)
+
+        default_results = await tool.search_web(
+            query="weather in amman over the next 10 days",
+        )
+        deep_results = await tool.search_web(
+            query="compare vector databases",
+            domains=["docs.example.com"],
+            urls=["https://example.com/guide"],
+            effort="deep",
+        )
+
+        assert len(default_results) == 1, default_results
+        assert len(deep_results) == 1, deep_results
+        assert captured_calls[0]["query"] == "weather in amman over the next 10 days"
+        assert captured_calls[0]["depth"] == "normal", captured_calls
+        assert captured_calls[0]["urls"] is None, captured_calls
+        assert captured_calls[1]["query"] == "compare vector databases site:docs.example.com"
+        assert captured_calls[1]["depth"] == "deep", captured_calls
+        assert captured_calls[1]["urls"] == ["https://example.com/guide"], captured_calls
+
+    asyncio.run(scenario())
+
+
+def test_search_searxng_collects_multiple_pages_when_more_candidates_are_needed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __init__(self, payload: dict[str, Any]):
+            self.payload = payload
+
+        async def __aenter__(self) -> "FakeResponse":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def json(self) -> dict[str, Any]:
+            return self.payload
+
+    class FakeSession:
+        requested_urls: list[str] = []
+
+        def __init__(self, *args: Any, **kwargs: Any):
+            _ = args, kwargs
+
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            _ = exc_type, exc, tb
+            return False
+
+        def get(self, url: str, headers: dict[str, str]) -> FakeResponse:
+            _ = headers
+            self.requested_urls.append(url)
+            if "pageno=2" in url:
+                return FakeResponse(
+                    {
+                        "results": [
+                            {
+                                "url": "https://example.com/three",
+                                "title": "Three",
+                                "content": "Third result.",
+                            },
+                            {
+                                "url": "https://example.com/four",
+                                "title": "Four",
+                                "content": "Fourth result.",
+                            },
+                        ]
+                    }
+                )
+            return FakeResponse(
+                {
+                    "results": [
+                        {
+                            "url": "https://example.com/one",
+                            "title": "One",
+                            "content": "First result.",
+                        },
+                        {
+                            "url": "https://example.com/two",
+                            "title": "Two",
+                            "content": "Second result.",
+                        },
+                    ]
+                }
+            )
+
+    async def scenario() -> None:
+        tool = Tools()
+        monkeypatch.setattr(
+            "sourceweave_web_search.tool.aiohttp.ClientSession", FakeSession
+        )
+        tool.user_valves.SEARXNG_MAX_RESULTS = 4
+
+        results = await tool._search_searxng("example query")
+
+        assert [result["url"] for result in results] == [
+            "https://example.com/one",
+            "https://example.com/two",
+            "https://example.com/three",
+            "https://example.com/four",
+        ], results
+        assert any("pageno=2" in url for url in FakeSession.requested_urls), (
+            FakeSession.requested_urls
+        )
+
+    asyncio.run(scenario())
+
+
+def test_search_web_requests_depth_sized_candidate_pool_from_searxng(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        tool = Tools()
+        tool._cache.enabled = False
+        observed_search_limits: list[int | None] = []
+
+        async def fake_search(
+            query_value: str,
+            __event_emitter__: Any = None,
+        ) -> list[dict[str, Any]]:
+            _ = query_value, __event_emitter__
+            observed_search_limits.append(tool.user_valves.SEARXNG_MAX_RESULTS)
+            return [
+                tool._build_candidate(
+                    f"https://example{idx}.com/result",
+                    title=f"Result {idx}",
+                    snippet=f"Snippet {idx}",
+                    search_rank=idx,
+                )
+                for idx in range(1, 13)
+            ]
+
+        async def fake_crawl(
+            urls_to_fetch: list[str],
+            query: str | None = None,
+            timeout_s: float | None = None,
+            cache_mode: str | None = None,
+            source_type: str = "search_result",
+            __event_emitter__: Any = None,
+        ) -> dict[str, Any]:
+            _ = timeout_s, cache_mode, __event_emitter__
+            url = urls_to_fetch[0]
+            return {
+                "content": [
+                    _make_crawl_result(
+                        tool,
+                        url,
+                        url.rsplit("/", 1)[-1].title(),
+                        f"# {url}\n\nResult content.",
+                        query or "",
+                        source_type=source_type,
+                    )
+                ],
+                "images": [],
+            }
+
+        monkeypatch.setattr(tool, "_search_searxng", fake_search)
+        monkeypatch.setattr(tool, "_crawl_url", fake_crawl)
+
+        results = await tool._search_web_internal(
+            query="example query",
+            depth="deep",
+            fresh=True,
+        )
+
+        assert observed_search_limits == [50], observed_search_limits
+        assert len(results) == 10, results
+        assert tool.user_valves.SEARXNG_MAX_RESULTS is None
+
+    asyncio.run(scenario())
+
+
 def test_search_web_emits_search_level_status_updates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

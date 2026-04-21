@@ -39,6 +39,19 @@ SearchUrls = Annotated[
     ),
 ]
 
+SearchEffort = Annotated[
+    str,
+    Field(
+        description=(
+            "Optional search effort. Use quick for narrow, time-sensitive, or single-answer lookups, or when urls already identify the must-read page; "
+            "examples: weather forecast, stock price, today's exchange rate, or reading one known URL. "
+            "Use normal for most docs lookup, troubleshooting, and focused research; examples: Python requests timeout error, React useEffect cleanup, API docs for OAuth refresh tokens. "
+            "Use deep for broad, ambiguous, or synthesis-heavy research; examples: compare vector databases, research browser automation tools, summarize the current landscape of local RAG stacks. "
+            "Avoid deep for simple weather-like lookups."
+        )
+    ),
+]
+
 ReadPageIds = Annotated[
     list[str],
     Field(
@@ -97,6 +110,7 @@ def build_mcp_server(
         name="search_web",
         description=(
             "Search the web for relevant sources and return compact summaries with stable page_ids for follow-up reads. "
+            "Choose effort deliberately: quick for narrow current-fact lookups or explicit URLs, normal for most docs and troubleshooting, and deep for broad comparisons or synthesis-heavy research. "
             "Use domains when you want to constrain results to specific hosts."
         ),
     )
@@ -104,11 +118,13 @@ def build_mcp_server(
         query: SearchQuery,
         domains: SearchDomains = None,
         urls: SearchUrls = None,
+        effort: SearchEffort = "normal",
     ):
         return await tool_instance.search_web(
             query=query,
             domains=domains,
             urls=urls,
+            effort=effort,
         )
 
     @server.tool(
