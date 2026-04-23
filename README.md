@@ -1,240 +1,98 @@
 # SourceWeave Web Search
 
+![Python 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
+![MIT License](https://img.shields.io/badge/License-MIT-111111?logo=opensourceinitiative&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-0EA5E9)
+![Docker managed runtime](https://img.shields.io/badge/Docker-managed%20runtime-2496ED?logo=docker&logoColor=white)
+
+Search-first MCP server and CLI for web research.
+
 <!-- mcp-name: io.github.MRNAQA/sourceweave-web-search -->
 
-SourceWeave Web Search is a fully local MCP server and CLI for web research.
+> [!NOTE]
+> `sourceweave-search-mcp` is the default local entrypoint. When explicit `SOURCEWEAVE_SEARCH_*` endpoint variables are absent, it discovers or starts the local Docker-backed stack automatically. If you already run the services yourself, set explicit endpoints and it will use them instead.
 
-It uses SearXNG for discovery, Crawl4AI for cleaned page extraction, and Redis or Valkey as the canonical persisted page cache.
+[Overview](#overview) • [Getting started](#getting-started) • [Managed local runtime](#managed-local-runtime) • [MCP client setup](#mcp-client-setup) • [CLI](#cli) • [Container deployments](#container-deployments) • [OpenWebUI](#openwebui) • [Runtime configuration](#runtime-configuration) • [Development](#development)
 
-For most users, the setup is simple:
+## Overview
 
-1. run the supporting services locally in containers, or point at existing external endpoints
-2. start the MCP server with `uvx`
-3. connect your MCP client to the running server over `stdio` or local HTTP
+SourceWeave Web Search gives MCP clients a compact three-tool contract for web research:
 
-## Key Features
+- `search_web(query, domains?, urls?, effort?)` discovers sources and returns compact results with stable `page_id` handles.
+- `read_pages(page_ids, focus?)` reads stored pages by `page_id`.
+- `read_urls(urls, focus?)` reads direct URLs without searching first.
 
-- MCP server with `stdio`, `sse`, and `streamable-http` transports
-- fully local web research workflow with source discovery and stable follow-up reads for MCP clients
-- automatic document conversion for PDFs and other supported documents when detected
-- lean MCP contract with `search_web`, `read_pages`, and `read_urls`, plus optional search `effort` control for quick, normal, or deep discovery
-- publishable Python package, container image, and generated OpenWebUI artifact
-- compatible with OpenCode, VS Code Copilot, and other MCP clients
+It combines:
 
-## Requirements
+| Component | Role |
+| --- | --- |
+| SearXNG | Search discovery |
+| Crawl4AI | Clean HTML extraction |
+| Redis or Valkey | Persisted page cache and `page_id` store |
+| MarkItDown | Document conversion for PDFs and other supported files |
+
+## Getting started
+
+### Requirements
 
 - Python `3.12+`
-- a reachable SearXNG endpoint
-- a reachable Crawl4AI endpoint
-- a reachable Redis or Valkey instance
+- Docker with Compose support for the default managed local runtime
+- Explicit `SOURCEWEAVE_SEARCH_*` endpoints only if you want hosted or self-managed services
 
-Optional:
+### Managed local runtime
 
-- Docker and Docker Compose for the repo-local stack
-
-## Recommended Local Deployment
-
-Start the supporting services locally:
+Run the server from the published package:
 
 ```bash
-git clone https://github.com/MRNAQA/sourceweave-web-search.git
-cd sourceweave-web-search
-cp .env.example .env
-docker compose up -d redis crawl4ai searxng
-```
-
-Then start the MCP server from the published package with `uvx` and point it at those local endpoints:
-
-```bash
-SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://127.0.0.1:19080/search?format=json&q=<query>" \
-SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://127.0.0.1:19235" \
-SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://127.0.0.1:16379/2" \
 uvx --from sourceweave-web-search sourceweave-search-mcp
 ```
 
-For a local HTTP MCP endpoint instead of `stdio`:
+Or start the MCP server over HTTP:
 
 ```bash
-SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://127.0.0.1:19080/search?format=json&q=<query>" \
-SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://127.0.0.1:19235" \
-SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://127.0.0.1:16379/2" \
 uvx --from sourceweave-web-search sourceweave-search-mcp \
   --transport streamable-http \
   --host 127.0.0.1 \
   --port 8000
 ```
 
-You can also point the same `uvx` command at externally hosted SearXNG, Crawl4AI, and Redis or Valkey endpoints by changing the environment variables.
+When no endpoint env vars are set, `sourceweave-search-mcp`:
 
-## Installation Options
-
-### Python package
-
-Published releases can be installed from PyPI:
-
-```bash
-pip install sourceweave-web-search
-```
-
-Or run directly without a global install:
-
-```bash
-uvx --from sourceweave-web-search sourceweave-search-mcp
-uvx --from sourceweave-web-search sourceweave-search --query "python programming"
-```
-
-### Repo checkout
-
-For local development or source-based runs:
-
-```bash
-git clone https://github.com/MRNAQA/sourceweave-web-search.git
-cd sourceweave-web-search
-uv sync --locked --group dev
-uv run sourceweave-search-mcp
-```
-
-### Container image
-
-The release workflow can publish a container image to:
-
-- `ghcr.io/mrnaqa/sourceweave-web-search-mcp`
-
-Example runtime:
-
-```bash
-docker run --rm -p 8000:8000 \
-  -e SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://host.docker.internal:19080/search?format=json&q=<query>" \
-  -e SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://host.docker.internal:19235" \
-  -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
-  ghcr.io/mrnaqa/sourceweave-web-search-mcp:latest
-```
-
-Example `docker compose` recipe:
-
-```yaml
-services:
-  redis:
-    image: valkey/valkey:9-alpine
-    command: ["redis-server", "--appendonly", "no"]
-
-  crawl4ai:
-    image: unclecode/crawl4ai:0.8.6
-
-  searxng:
-    image: searxng/searxng:2026.4.11-9e08a6771
-
-  sourceweave-mcp:
-    image: ghcr.io/mrnaqa/sourceweave-web-search-mcp:latest
-    depends_on:
-      - redis
-      - crawl4ai
-      - searxng
-    environment:
-      SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL: http://searxng:8080/search?format=json&q=<query>
-      SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL: http://crawl4ai:11235
-      SOURCEWEAVE_SEARCH_CACHE_REDIS_URL: redis://redis:6379/2
-      FASTMCP_HOST: 0.0.0.0
-      FASTMCP_PORT: 8000
-    ports:
-      - "8000:8000"
-```
-
-That gives you a local HTTP MCP endpoint at `http://127.0.0.1:8000/mcp` with the SourceWeave container linked to the supporting services by container name.
-
-The repo's own `docker compose up -d --build mcp` path also builds and runs this same publishable image locally.
-
-## Runtime Configuration
-
-Set these environment variables:
-
-| Variable | Purpose |
+| Mode | What happens |
 | --- | --- |
-| `SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL` | SearXNG URL template. Must contain `<query>`. |
-| `SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL` | Crawl4AI base URL. |
-| `SOURCEWEAVE_SEARCH_CACHE_REDIS_URL` | Redis or Valkey URL used for caching. |
-| `FASTMCP_HOST` | Host for `sse` or `streamable-http` transport. |
-| `FASTMCP_PORT` | Port for `sse` or `streamable-http` transport. |
+| Managed stack found | Join the existing SourceWeave-managed stack for the current runtime state directory |
+| Healthy external stack found | Reuse the canonical local ports `19080`, `19235`, and `16379` without ownership |
+| No reusable stack | Start and supervise a Docker-backed stack on canonical or free local ports |
 
-Example:
+Managed state lives under `~/.sourceweave-local/managed-runtime`. Multiple MCP processes on the same machine share one managed stack per state directory.
+
+> [!IMPORTANT]
+> Managed runtime removes containers only when the last active SourceWeave-managed process exits. Named volumes are preserved, so cache data survives restarts. If the original owning process dies, a later process can recover the same stack from Docker project identity and persisted runtime state.
+
+### Explicit endpoint mode
+
+If you already run SearXNG, Crawl4AI, and Redis or Valkey yourself, or want to point at hosted services, set explicit endpoints and the MCP entrypoint will bypass managed Docker startup:
 
 ```bash
 SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://127.0.0.1:19080/search?format=json&q=<query>" \
 SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://127.0.0.1:19235" \
 SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://127.0.0.1:16379/2" \
-sourceweave-search --query "python programming" --read-first-pages 2
+uvx --from sourceweave-web-search sourceweave-search-mcp
 ```
 
-## Quick Start
+### Direct CLI
 
-The CLI is useful for smoke testing the runtime outside an MCP client.
-
-Search and immediately read the first results:
+`sourceweave-search` runs the tool directly. Use it when the supporting services are already available or when you provide explicit endpoints. It does not start Docker.
 
 ```bash
 sourceweave-search --query "python programming" --read-first-pages 2
+sourceweave-search --read-url "https://packaging.python.org/en/latest/"
 ```
 
-Verified live examples from the repo-local stack:
+> [!TIP]
+> The direct CLI also accepts `--searxng-base-url`, `--crawl4ai-base-url`, and `--cache-redis-url` overrides.
 
-- `sourceweave-search --read-url https://en.wikipedia.org/wiki/Comparison_of_HTTP_server_software ...` returned cleaned page content
-- `sourceweave-search --query 'HTTP overview' --domain developer.mozilla.org --read-first-page ...` returned compact search results plus a focused page read
-
-Constrain search to a specific host with `--domain`:
-
-```bash
-sourceweave-search \
-  --query "react useEffect cleanup example" \
-  --domain developer.mozilla.org \
-  --read-first-page
-```
-
-Read a direct URL without running `search_web` first:
-
-```bash
-sourceweave-search \
-  --read-url "https://packaging.python.org/en/latest/"
-```
-
-Read a document URL directly without extra flags:
-
-```bash
-sourceweave-search \
-  --query "guide pdf" \
-  --url "https://example.com/guide.pdf"
-```
-
-## MCP Server
-
-Run over stdio:
-
-```bash
-sourceweave-search-mcp
-```
-
-Run as a local HTTP endpoint:
-
-```bash
-sourceweave-search-mcp --transport streamable-http --host 127.0.0.1 --port 8000
-```
-
-## What MCP Clients Get
-
-MCP clients receive a lean three-tool contract:
-
-- `search_web(query, domains?, urls?, effort?)`: discover relevant sources and get compact results with stable `page_id` handles
-- `read_pages(page_ids, focus?)`: read stored pages by `page_id`
-- `read_urls(urls, focus?)`: read one or more direct URLs without searching first
-
-Public result shapes are intentionally small:
-
-- `search_web` returns `page_id`, `url`, `title`, `summary`, and `key_points`
-- `read_pages` and `read_urls` return `page_id`, `url`, `title`, and `content`
-- `content_type` is only included when the content is not HTML, and `truncated` is only included when true
-
-Human operators usually only need to know how to run the server and where to point the runtime endpoints. MCP clients handle the exact tool parameters.
-
-## MCP Client Setup
+## MCP client setup
 
 ### OpenCode
 
@@ -252,13 +110,8 @@ Example `opencode.json` / `opencode.jsonc` / `~/.config/opencode/opencode.json`:
         "sourceweave-web-search",
         "sourceweave-search-mcp"
       ],
-      "environment": {
-        "SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL": "http://127.0.0.1:19080/search?format=json&q=<query>",
-        "SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL": "http://127.0.0.1:19235",
-        "SOURCEWEAVE_SEARCH_CACHE_REDIS_URL": "redis://127.0.0.1:16379/2"
-      },
       "enabled": true,
-      "timeout": 30000
+      "timeout": 300000
     }
   }
 }
@@ -274,7 +127,7 @@ For a shared HTTP endpoint instead:
       "type": "remote",
       "url": "http://127.0.0.1:18000/mcp",
       "enabled": true,
-      "timeout": 30000
+      "timeout": 300000
     }
   }
 }
@@ -294,12 +147,7 @@ Example `.vscode/mcp.json`:
         "--from",
         "sourceweave-web-search",
         "sourceweave-search-mcp"
-      ],
-      "env": {
-        "SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL": "http://127.0.0.1:19080/search?format=json&q=<query>",
-        "SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL": "http://127.0.0.1:19235",
-        "SOURCEWEAVE_SEARCH_CACHE_REDIS_URL": "redis://127.0.0.1:16379/2"
-      }
+      ]
     }
   }
 }
@@ -318,6 +166,55 @@ For a shared HTTP endpoint instead:
 }
 ```
 
+### Claude Code
+
+Example `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sourceweave": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "sourceweave-web-search",
+        "sourceweave-search-mcp"
+      ]
+    }
+  }
+}
+```
+
+For a project-scoped shared config, place the same block in `.mcp.json` at the repo root.
+
+## CLI
+
+The direct CLI is useful once the supporting services are already reachable. It gives you the same search-first workflow without the MCP wrapper.
+
+```bash
+sourceweave-search --query "react useEffect cleanup example" --read-first-page
+sourceweave-search --query "HTTP overview" --domain developer.mozilla.org --read-first-page
+sourceweave-search --read-url "https://packaging.python.org/en/latest/"
+```
+
+## Container deployments
+
+The managed local runtime is for host-side `uvx` or `uv run` launches. Containerized deployments still use explicit endpoint wiring.
+
+- Image: `ghcr.io/mrnaqa/sourceweave-web-search-mcp`
+- Repo-local compose entrypoint: `docker compose up -d --build mcp`
+
+Example container run:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL="http://host.docker.internal:19080/search?format=json&q=<query>" \
+  -e SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL="http://host.docker.internal:19235" \
+  -e SOURCEWEAVE_SEARCH_CACHE_REDIS_URL="redis://host.docker.internal:16379/2" \
+  ghcr.io/mrnaqa/sourceweave-web-search-mcp:latest
+```
+
 ## OpenWebUI
 
 This repo also ships a generated standalone OpenWebUI tool file at `artifacts/sourceweave_web_search.py`.
@@ -330,17 +227,50 @@ uv run sourceweave-build-openwebui --check
 
 Paste that artifact into OpenWebUI when you want the standalone tool-file deployment path. The generated file rewrites the default endpoints to the repo-local compose service names so it matches the container deployment path out of the box.
 
-## Defaults
+## Runtime configuration
 
-Default host-side endpoints used by the package:
+Optional environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL` | SearXNG URL template. Must contain `<query>`. |
+| `SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL` | Crawl4AI base URL. |
+| `SOURCEWEAVE_SEARCH_CACHE_REDIS_URL` | Redis or Valkey URL used for caching. |
+| `FASTMCP_HOST` | Host for `sse` or `streamable-http` transport. |
+| `FASTMCP_PORT` | Port for `sse` or `streamable-http` transport. |
+
+If the endpoint variables are unset, `sourceweave-search-mcp` defaults to managed local runtime.
+
+- Canonical host endpoints remain the preferred defaults and the external-reuse probe targets.
+- A SourceWeave-managed stack may use different free host ports when the canonical defaults are already occupied.
+- Multiple MCP processes on the same machine share one managed stack per local runtime state directory.
+
+Default endpoint values:
 
 - SearXNG: `http://127.0.0.1:19080/search?format=json&q=<query>`
 - Crawl4AI: `http://127.0.0.1:19235`
 - Redis: `redis://127.0.0.1:16379/2`
 
-Default repo-local ports:
+Default preferred host ports for managed startup:
 
 - SearXNG: `19080`
 - Crawl4AI: `19235`
 - Redis: `16379`
 - MCP: `8000` when run directly with `uvx`; `18000` at `/mcp` when using the repo's `mcp` compose service
+
+## Development
+
+```bash
+git clone https://github.com/MRNAQA/sourceweave-web-search.git
+cd sourceweave-web-search
+uv sync --locked --group dev
+uv run sourceweave-search-mcp
+```
+
+Useful checks:
+
+```bash
+uv run sourceweave-build-openwebui --check
+uv run sourceweave-search-mcp --help
+uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py tests/test_managed_runtime.py -m "not integration"
+```

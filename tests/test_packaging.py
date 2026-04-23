@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 import subprocess
 import sys
@@ -202,6 +203,13 @@ def test_built_distributions_ship_publishable_metadata() -> None:
             wheel_names
         )
     assert "docker-compose.yml" not in wheel_names, wheel_names
+    assert (
+        "sourceweave_web_search/managed_runtime_assets/compose.yaml" in wheel_names
+    ), wheel_names
+    assert (
+        "sourceweave_web_search/managed_runtime_assets/searxng-settings.yml"
+        in wheel_names
+    ), wheel_names
 
     sdist_root = sdist_path.name.removesuffix(".tar.gz")
     with tarfile.open(sdist_path) as sdist_archive:
@@ -237,6 +245,20 @@ def test_mcp_module_help_smoke() -> None:
     assert "--transport" in result.stdout, result.stdout
     assert "--host" in result.stdout, result.stdout
     assert "--port" in result.stdout, result.stdout
+
+
+def test_mcp_module_help_does_not_create_managed_runtime_state(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "sourceweave_web_search.mcp_server", "--help"],
+        cwd=_repo_root(),
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(tmp_path)},
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert not (tmp_path / ".sourceweave-local").exists()
 
 
 def test_mcp_server_exposes_expected_tools() -> None:

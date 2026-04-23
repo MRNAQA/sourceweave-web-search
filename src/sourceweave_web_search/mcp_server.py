@@ -8,6 +8,8 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from sourceweave_web_search.config import build_tools
+from sourceweave_web_search.managed_runtime import ManagedRuntimeError
+from sourceweave_web_search.managed_runtime import resolve_managed_runtime
 from sourceweave_web_search.tool import Tools
 
 
@@ -193,7 +195,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    build_mcp_server(host=args.host, port=args.port).run(transport=args.transport)
+    try:
+        with resolve_managed_runtime() as runtime:
+            tool = build_tools(valve_overrides=runtime.valve_overrides)
+            build_mcp_server(tool=tool, host=args.host, port=args.port).run(
+                transport=args.transport
+            )
+    except ManagedRuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     return 0
 
 

@@ -8,13 +8,13 @@
     "url": "https://github.com/MRNAQA/sourceweave-web-search",
     "source": "github"
   },
-  "version": "0.4.0",
+  "version": "0.5.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "sourceweave-web-search",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -23,17 +23,17 @@
         {
           "name": "SOURCEWEAVE_SEARCH_SEARXNG_BASE_URL",
           "description": "SearXNG URL template. Must contain <query>.",
-          "isRequired": true
+          "isRequired": false
         },
         {
           "name": "SOURCEWEAVE_SEARCH_CRAWL4AI_BASE_URL",
           "description": "Base URL for the Crawl4AI service.",
-          "isRequired": true
+          "isRequired": false
         },
         {
           "name": "SOURCEWEAVE_SEARCH_CACHE_REDIS_URL",
           "description": "Redis or Valkey URL used for caching.",
-          "isRequired": true
+          "isRequired": false
         }
       ]
     }

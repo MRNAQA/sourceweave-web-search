@@ -23,9 +23,12 @@ on:
       - "src/sourceweave_web_search/cli.py"
       - "src/sourceweave_web_search/config.py"
       - "src/sourceweave_web_search/build_openwebui.py"
+      - "src/sourceweave_web_search/managed_runtime.py"
+      - "src/sourceweave_web_search/managed_runtime_assets/**"
       - "src/sourceweave_web_search/mcp_server.py"
       - "src/sourceweave_web_search/tool.py"
       - "tests/test_config.py"
+      - "tests/test_managed_runtime.py"
       - "tests/test_packaging.py"
       - "tests/test_tool.py"
   push:
@@ -52,9 +55,12 @@ on:
       - "src/sourceweave_web_search/cli.py"
       - "src/sourceweave_web_search/config.py"
       - "src/sourceweave_web_search/build_openwebui.py"
+      - "src/sourceweave_web_search/managed_runtime.py"
+      - "src/sourceweave_web_search/managed_runtime_assets/**"
       - "src/sourceweave_web_search/mcp_server.py"
       - "src/sourceweave_web_search/tool.py"
       - "tests/test_config.py"
+      - "tests/test_managed_runtime.py"
       - "tests/test_packaging.py"
       - "tests/test_tool.py"
   workflow_dispatch:
@@ -96,7 +102,7 @@ jobs:
         run: uv run pyright src tests
 
       - name: Run deterministic packaging and runtime tests
-        run: uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py -m "not integration"
+        run: uv run pytest tests/test_config.py tests/test_packaging.py tests/test_tool.py tests/test_managed_runtime.py -m "not integration"
 
       - name: Build publishable distributions
         run: uv build --no-sources --sdist --wheel --out-dir dist/release-gate --clear --no-create-gitignore

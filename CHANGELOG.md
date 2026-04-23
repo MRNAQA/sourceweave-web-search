@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.0
+
+- add a managed local runtime to `sourceweave-search-mcp` so the MCP server can discover, reuse, or start its Docker-backed dependencies automatically when explicit endpoint variables are absent
+- coordinate multi-process local MCP usage by discovering SourceWeave-managed stacks via Docker Compose project identity, persisting runtime state, and only tearing containers down after the last managed process exits
+- fall back to dynamically allocated host ports when the canonical local ports are already occupied, while still reusing a healthy externally managed stack on the canonical defaults
+- package the managed runtime assets and refresh docs, client setup guidance, server metadata, and deterministic release coverage for the new launch behavior
+
 ## 0.4.0
 
 - add `effort` guidance to `search_web` so MCP clients can choose `quick`, `normal`, or `deep` research passes with matching search depth and pagination
